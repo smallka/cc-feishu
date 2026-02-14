@@ -1,6 +1,6 @@
-# 飞书机器人 - WebSocket 长连接
+# 飞书机器人 - Claude Code 交互
 
-基于 TypeScript 和 Node.js 的飞书机器人，使用 WebSocket 长连接模式实现实时消息交互。
+基于 TypeScript 和 Node.js 的飞书机器人，通过 WebSocket 长连接接收飞书消息，桥接 Claude Code CLI 实现 AI 对话交互。
 
 ## 技术栈
 
@@ -8,6 +8,7 @@
 - **运行时**: Node.js 18+
 - **核心依赖**:
   - `@larksuiteoapi/node-sdk`: 飞书官方 SDK
+  - `ws`: 本地 WebSocket 服务器（桥接 Claude Code CLI）
   - `winston`: 结构化日志
   - `dotenv`: 环境变量管理
 
@@ -21,7 +22,13 @@ cc-feishu/
 │   │   └── index.ts            # 配置管理
 │   ├── bot/
 │   │   ├── client.ts           # 飞书客户端
-│   │   └── websocket.ts        # WebSocket 连接管理
+│   │   └── websocket.ts        # 飞书 WebSocket 连接管理
+│   ├── claude/
+│   │   ├── types.ts            # Claude Code CLI NDJSON 协议类型
+│   │   ├── ws-server.ts        # 本地 WebSocket 服务器
+│   │   ├── bridge.ts           # CLI 消息桥接（协议解析、自动审批）
+│   │   ├── launcher.ts         # Claude Code CLI 进程管理
+│   │   └── session-manager.ts  # 会话管理（chat → session 映射）
 │   ├── handlers/
 │   │   └── message.handler.ts  # 消息事件处理
 │   ├── services/
@@ -56,6 +63,7 @@ cp .env.example .env
 ```env
 FEISHU_APP_ID=cli_xxxxxxxxxx
 FEISHU_APP_SECRET=xxxxxxxxxxxxxx
+CLAUDE_WS_PORT=9800
 NODE_ENV=development
 LOG_LEVEL=info
 ```
@@ -84,6 +92,11 @@ LOG_LEVEL=info
    - 创建测试群组
    - 将机器人添加到群组
 
+### 前置条件
+
+- 本机已安装 Claude Code CLI（`claude` 命令可用）
+- Claude Code 已完成认证登录
+
 ### 4. 启动机器人
 
 开发模式（热重载）：
@@ -101,35 +114,78 @@ npm start
 
 ### 当前功能
 
-- ✅ WebSocket 长连接（自动重连和心跳）
-- ✅ 文本消息接收
-- ✅ 文本消息回复
+- ✅ 飞书 WebSocket 长连接（自动重连和心跳）
+- ✅ Claude Code CLI 集成（通过 `--sdk-url` WebSocket 协议）
+- ✅ 每个飞书 chat 独立 Claude Code 会话
+- ✅ 工具权限自动批准
+- ✅ 长消息自动分段发送（飞书 4000 字符限制）
+- ✅ 消息去重（防止飞书重复投递）
+- ✅ 命令支持（`/new`、`/reset`、`/status`）
 - ✅ 结构化日志记录
 - ✅ 优雅关闭（Ctrl+C）
-- ✅ 错误处理和重试
 
-### 消息处理逻辑
+### 核心交互流程
 
-当前实现了简单的回显功能：
-- 接收用户发送的文本消息
-- 回复"你说: [用户消息]"
+```
+飞书用户发消息 → 飞书服务器 → (SDK WebSocket) → cc-feishu bot
+    → SessionManager → Claude Code CLI (--sdk-url)
+    → 本地 WebSocket Server → CLIBridge (NDJSON 协议)
+    → 收集完整回复 → 发回飞书
+```
+
+### 命令
+
+- `/new` 或 `/reset`: 重置当前 chat 的 Claude Code 会话
+- `/status`: 查看当前会话状态
 
 ## 核心模块说明
 
-### WebSocket 连接管理 (`src/bot/websocket.ts`)
+### 飞书 WebSocket 连接管理 (`src/bot/websocket.ts`)
 
-负责管理 WebSocket 长连接：
+负责管理飞书 SDK WebSocket 长连接：
 - 创建 WSClient 实例
 - 注册事件处理器
 - 自动处理心跳和重连
 - 优雅关闭连接
 
+### Claude Code 会话管理 (`src/claude/session-manager.ts`)
+
+管理飞书 chat 到 Claude Code session 的映射：
+- 每个 chat 维护独立的 Claude Code 进程
+- 自动创建/复用会话
+- 回复过长时自动分段发送
+- 优雅关闭所有会话
+
+### Claude Code CLI 桥接 (`src/claude/bridge.ts`)
+
+每个 session 一个 bridge 实例：
+- 解析 NDJSON 协议消息（system/assistant/result/control_request）
+- 收集 assistant 消息中的文本内容
+- 收到 result 时合并文本通过回调通知上层
+- 自动批准工具权限请求
+- CLI 未连接时缓存消息队列
+
+### Claude Code CLI 启动器 (`src/claude/launcher.ts`)
+
+管理 Claude Code CLI 子进程：
+- 使用 `--sdk-url` 参数连接本地 WebSocket 服务器
+- 清除 `CLAUDECODE` 环境变量防止嵌套检测
+- 进程退出监控和清理
+
+### 本地 WebSocket 服务器 (`src/claude/ws-server.ts`)
+
+Claude Code CLI 连接的 WebSocket 端点：
+- 监听端口（默认 9800）
+- 路由 `/ws/cli/:sessionId` 连接
+- 将 CLI 消息路由到对应 session 的 bridge
+
 ### 消息处理器 (`src/handlers/message.handler.ts`)
 
 处理接收到的消息事件：
+- 消息去重（基于 message_id）
 - 解析消息内容
-- 根据消息类型分发处理
-- 调用消息服务发送回复
+- 命令分发（`/new`、`/reset`、`/status`）
+- 转发用户消息到 Claude Code 会话
 
 ### 消息服务 (`src/services/message.service.ts`)
 
@@ -144,6 +200,7 @@ npm start
 - 加载环境变量
 - 验证必需配置
 - 提供类型安全的配置访问
+- Claude Code WebSocket 端口配置（`CLAUDE_WS_PORT`，默认 9800）
 
 ### 日志工具 (`src/utils/logger.ts`)
 
@@ -229,7 +286,8 @@ const eventDispatcher = new lark.EventDispatcher({}).register({
 ### 短期扩展
 
 - 支持更多消息类型（图片、文件、富文本）
-- 实现命令系统（/help, /status）
+- 流式输出（通过飞书卡片消息更新）
+- 会话超时自动清理
 - 添加消息模板
 
 ### 中期扩展

@@ -7,6 +7,9 @@ interface Config {
     appId: string;
     appSecret: string;
   };
+  claude: {
+    wsPort: number;
+  };
   app: {
     env: string;
     logLevel: string;
@@ -17,6 +20,9 @@ const config: Config = {
   feishu: {
     appId: process.env.FEISHU_APP_ID || '',
     appSecret: process.env.FEISHU_APP_SECRET || '',
+  },
+  claude: {
+    wsPort: parseInt(process.env.CLAUDE_WS_PORT || '9800', 10),
   },
   app: {
     env: process.env.NODE_ENV || 'development',

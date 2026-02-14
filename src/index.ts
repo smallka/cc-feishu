@@ -1,15 +1,25 @@
 import logger from './utils/logger';
 import config from './config';
 import websocketManager from './bot/websocket';
+import { SessionManager } from './claude/session-manager';
+import { setSessionManager } from './handlers/message.handler';
+
+let sessionManager: SessionManager | null = null;
 
 async function bootstrap() {
   try {
     logger.info('Starting Feishu bot application', {
       env: config.app.env,
       appId: config.feishu.appId,
+      claudeWsPort: config.claude.wsPort,
     });
 
-    // 启动 WebSocket 连接
+    // 启动 Claude Code WebSocket 服务器
+    sessionManager = new SessionManager(config.claude.wsPort);
+    await sessionManager.start();
+    setSessionManager(sessionManager);
+
+    // 启动飞书 WebSocket 连接
     await websocketManager.start();
 
     logger.info('Feishu bot is running');
@@ -20,17 +30,15 @@ async function bootstrap() {
 }
 
 // 优雅关闭
-process.on('SIGINT', async () => {
-  logger.info('Received SIGINT, shutting down gracefully');
+async function shutdown() {
+  logger.info('Shutting down gracefully');
+  await sessionManager?.stop();
   await websocketManager.stop();
   process.exit(0);
-});
+}
 
-process.on('SIGTERM', async () => {
-  logger.info('Received SIGTERM, shutting down gracefully');
-  await websocketManager.stop();
-  process.exit(0);
-});
+process.on('SIGINT', shutdown);
+process.on('SIGTERM', shutdown);
 
 // 启动应用
 bootstrap();

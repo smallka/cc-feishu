@@ -20,7 +20,7 @@ class WebSocketManager {
       const eventDispatcher = new lark.EventDispatcher({}).register({
         'im.message.receive_v1': async (data) => {
           try {
-            await handleMessage(data);
+            await handleMessage(data as any);
           } catch (error) {
             logger.error('Error handling message event', { error });
           }
