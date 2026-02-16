@@ -3,23 +3,30 @@ import logger from '../utils/logger';
 import { ClaudeWsServer } from './ws-server';
 import { CLIBridge } from './bridge';
 import { CLILauncher } from './launcher';
-import { getSessionId, setSessionId, removeSessionId } from './session-store';
+import {
+  getSessionId, setSessionId, removeSessionId,
+  getCurrentCwd, setCurrentCwd, getAllCwds,
+} from './session-store';
 import messageService from '../services/message.service';
+import config from '../config';
 
 interface Session {
   chatId: string;
   sessionId: string;
+  cwd: string;
   bridge: CLIBridge;
   launcher: CLILauncher;
 }
 
 export class SessionManager {
-  private sessions = new Map<string, Session>(); // chatId -> Session
+  private sessions = new Map<string, Session>(); // chatId -> active Session
   private wsServer: ClaudeWsServer;
   private wsPort: number;
+  private defaultCwd: string;
 
   constructor(wsPort: number) {
     this.wsPort = wsPort;
+    this.defaultCwd = config.claude.workRoot;
     this.wsServer = new ClaudeWsServer(wsPort);
 
     this.wsServer.onCLIConnect((sessionId, ws) => {
@@ -48,45 +55,72 @@ export class SessionManager {
     await this.wsServer.start();
   }
 
+  getCwd(chatId: string): string {
+    return getCurrentCwd(chatId) ?? this.defaultCwd;
+  }
+
   async sendMessage(chatId: string, text: string): Promise<void> {
-    const session = this.getOrCreateSession(chatId);
+    const cwd = this.getCwd(chatId);
+    const session = this.getOrCreateSession(chatId, cwd);
     session.bridge.sendUserMessage(text);
   }
 
+  async switchCwd(chatId: string, newCwd: string): Promise<void> {
+    // 杀掉当前活跃的 CLI
+    const current = this.sessions.get(chatId);
+    if (current) {
+      await current.launcher.kill();
+      current.bridge.detachSocket();
+      this.sessions.delete(chatId);
+    }
+
+    // 更新持久化的当前目录
+    setCurrentCwd(chatId, newCwd, this.defaultCwd);
+
+    // 立即启动新目录的 CLI
+    this.getOrCreateSession(chatId, newCwd);
+  }
+
   async resetSession(chatId: string): Promise<void> {
+    const cwd = this.getCwd(chatId);
     const session = this.sessions.get(chatId);
     if (session) {
       await session.launcher.kill();
       session.bridge.detachSocket();
       this.sessions.delete(chatId);
     }
-    removeSessionId(chatId);
-    logger.info('Session reset', { chatId });
+    removeSessionId(chatId, cwd);
+    logger.info('Session reset', { chatId, cwd });
   }
 
   getSessionInfo(chatId: string): string {
+    const cwd = this.getCwd(chatId);
     const session = this.sessions.get(chatId);
-    const storedId = getSessionId(chatId);
-    if (!session && !storedId) return '当前没有活跃的 Claude Code 会话';
-    if (!session) return `会话 ID: ${storedId}\n状态: 未运行（可恢复）`;
+    const storedId = getSessionId(chatId, cwd);
+    const cwdLine = `工作目录: ${cwd}`;
+    if (!session && !storedId) return `${cwdLine}\n当前没有活跃的 Claude Code 会话`;
+    if (!session) return `${cwdLine}\n会话 ID: ${storedId}\n状态: 未运行（可恢复）`;
     const alive = session.launcher.isAlive();
-    return `会话 ID: ${session.sessionId}\n状态: ${alive ? '运行中' : '已断开'}`;
+    return `${cwdLine}\n会话 ID: ${session.sessionId}\n状态: ${alive ? '运行中' : '已断开'}`;
   }
 
-  private getOrCreateSession(chatId: string): Session {
+  listCwds(chatId: string): string[] {
+    return getAllCwds(chatId);
+  }
+
+  private getOrCreateSession(chatId: string, cwd: string): Session {
     let session = this.sessions.get(chatId);
-    if (session && session.launcher.isAlive()) {
+    if (session && session.cwd === cwd && session.launcher.isAlive()) {
       return session;
     }
 
-    // 清理旧的内存 session
+    // 清理旧的内存 session（cwd 不同或进程已死）
     if (session) {
       session.launcher.kill().catch(() => {});
       this.sessions.delete(chatId);
     }
 
-    // 检查持久化存储，决定 resume 还是新建
-    const storedSessionId = getSessionId(chatId);
+    const storedSessionId = getSessionId(chatId, cwd);
     const sessionId = storedSessionId ?? randomUUID();
     const resume = !!storedSessionId;
 
@@ -104,27 +138,26 @@ export class SessionManager {
       }
     });
 
-    // CLI 未初始化就退出时，区分 resume 失败和其他启动错误
     launcher.onExit((code) => {
       if (!bridge.isInitialized()) {
         if (resume) {
-          logger.warn('Resume failed, clearing stored session', { chatId, sessionId, code });
-          removeSessionId(chatId);
+          logger.warn('Resume failed, clearing stored session', { chatId, sessionId, cwd, code });
+          removeSessionId(chatId, cwd);
         } else {
-          logger.error('CLI failed to start', { chatId, sessionId, code });
+          logger.error('CLI failed to start', { chatId, sessionId, cwd, code });
         }
       }
     });
 
-    launcher.start({ wsPort: this.wsPort, resume });
+    launcher.start({ wsPort: this.wsPort, resume, cwd });
 
     if (!resume) {
-      setSessionId(chatId, sessionId);
+      setSessionId(chatId, cwd, sessionId, this.defaultCwd);
     }
 
-    session = { chatId, sessionId, bridge, launcher };
+    session = { chatId, sessionId, cwd, bridge, launcher };
     this.sessions.set(chatId, session);
-    logger.info(resume ? 'Resuming session' : 'New session created', { chatId, sessionId });
+    logger.info(resume ? 'Resuming session' : 'New session created', { chatId, sessionId, cwd });
     return session;
   }
 

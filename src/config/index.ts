@@ -9,6 +9,7 @@ interface Config {
   };
   claude: {
     wsPort: number;
+    workRoot: string;
   };
   app: {
     env: string;
@@ -23,6 +24,7 @@ const config: Config = {
   },
   claude: {
     wsPort: parseInt(process.env.CLAUDE_WS_PORT || '9800', 10),
+    workRoot: process.env.CLAUDE_WORK_ROOT || process.cwd(),
   },
   app: {
     env: process.env.NODE_ENV || 'development',

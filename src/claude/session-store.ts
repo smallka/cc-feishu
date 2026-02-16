@@ -4,8 +4,13 @@ import logger from '../utils/logger';
 
 const STORE_PATH = join(process.cwd(), '.sessions.json');
 
+interface ChatStore {
+  currentCwd: string;
+  sessions: { [cwd: string]: string }; // cwd -> sessionId
+}
+
 interface StoreData {
-  [chatId: string]: string; // chatId -> sessionId
+  [chatId: string]: ChatStore;
 }
 
 let cache: StoreData | null = null;
@@ -17,10 +22,25 @@ function load(): StoreData {
     return cache;
   }
   try {
-    const parsed = JSON.parse(readFileSync(STORE_PATH, 'utf-8'));
-    cache = (parsed && typeof parsed === 'object' && !Array.isArray(parsed))
-      ? parsed as StoreData
-      : {};
+    const raw = JSON.parse(readFileSync(STORE_PATH, 'utf-8'));
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+      cache = {};
+      return cache;
+    }
+    // 兼容旧格式: { chatId: "sessionId" } → 新格式
+    const migrated: StoreData = {};
+    for (const [key, value] of Object.entries(raw)) {
+      if (typeof value === 'string') {
+        // 旧格式，迁移
+        migrated[key] = {
+          currentCwd: process.cwd(),
+          sessions: { [process.cwd()]: value },
+        };
+      } else if (value && typeof value === 'object' && 'sessions' in value) {
+        migrated[key] = value as ChatStore;
+      }
+    }
+    cache = migrated;
     return cache;
   } catch {
     logger.warn('Failed to parse session store, starting fresh');
@@ -38,18 +58,43 @@ function save(data: StoreData): void {
   }
 }
 
-export function getSessionId(chatId: string): string | undefined {
-  return load()[chatId];
+function ensureChat(data: StoreData, chatId: string, defaultCwd: string): ChatStore {
+  if (!data[chatId]) {
+    data[chatId] = { currentCwd: defaultCwd, sessions: {} };
+  }
+  return data[chatId];
 }
 
-export function setSessionId(chatId: string, sessionId: string): void {
+export function getCurrentCwd(chatId: string): string | undefined {
+  return load()[chatId]?.currentCwd;
+}
+
+export function setCurrentCwd(chatId: string, cwd: string, defaultCwd: string): void {
   const data = load();
-  data[chatId] = sessionId;
+  ensureChat(data, chatId, defaultCwd).currentCwd = cwd;
   save(data);
 }
 
-export function removeSessionId(chatId: string): void {
+export function getSessionId(chatId: string, cwd: string): string | undefined {
+  return load()[chatId]?.sessions[cwd];
+}
+
+export function setSessionId(chatId: string, cwd: string, sessionId: string, defaultCwd: string): void {
   const data = load();
-  delete data[chatId];
+  ensureChat(data, chatId, defaultCwd).sessions[cwd] = sessionId;
   save(data);
+}
+
+export function removeSessionId(chatId: string, cwd: string): void {
+  const data = load();
+  const chat = data[chatId];
+  if (chat) {
+    delete chat.sessions[cwd];
+    save(data);
+  }
+}
+
+export function getAllCwds(chatId: string): string[] {
+  const chat = load()[chatId];
+  return chat ? Object.keys(chat.sessions) : [];
 }

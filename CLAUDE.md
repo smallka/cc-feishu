@@ -28,7 +28,8 @@ cc-feishu/
 │   │   ├── ws-server.ts        # 本地 WebSocket 服务器
 │   │   ├── bridge.ts           # CLI 消息桥接（协议解析、自动审批）
 │   │   ├── launcher.ts         # Claude Code CLI 进程管理
-│   │   └── session-manager.ts  # 会话管理（chat → session 映射）
+│   │   ├── session-manager.ts  # 会话管理（chat+cwd → session 映射）
+│   │   └── session-store.ts    # 会话持久化存储
 │   ├── handlers/
 │   │   └── message.handler.ts  # 消息事件处理
 │   ├── services/
@@ -64,6 +65,7 @@ cp .env.example .env
 FEISHU_APP_ID=cli_xxxxxxxxxx
 FEISHU_APP_SECRET=xxxxxxxxxxxxxx
 CLAUDE_WS_PORT=9800
+CLAUDE_WORK_ROOT=/path/to/your/projects
 NODE_ENV=development
 LOG_LEVEL=info
 ```
@@ -117,10 +119,11 @@ npm start
 - ✅ 飞书 WebSocket 长连接（自动重连和心跳）
 - ✅ Claude Code CLI 集成（通过 `--sdk-url` WebSocket 协议）
 - ✅ 每个飞书 chat 独立 Claude Code 会话
+- ✅ 工作目录切换（`/cd`），每个目录独立 session
 - ✅ 工具权限自动批准
 - ✅ 长消息自动分段发送（飞书 4000 字符限制）
 - ✅ 消息去重（防止飞书重复投递）
-- ✅ 命令支持（`/new`、`/reset`、`/status`）
+- ✅ 命令支持（`/new`、`/status`、`/cd`）
 - ✅ 结构化日志记录
 - ✅ 优雅关闭（Ctrl+C）
 
@@ -135,8 +138,10 @@ npm start
 
 ### 命令
 
-- `/new` 或 `/reset`: 重置当前 chat 的 Claude Code 会话
-- `/status`: 查看当前会话状态
+- `/new`: 重置当前工作目录的 Claude Code 会话
+- `/status`: 查看当前会话状态和工作目录
+- `/cd`: 列出所有已记录的工作目录
+- `/cd <路径>`: 切换工作目录（绝对路径或相对于 `CLAUDE_WORK_ROOT` 的路径），每个目录有独立的 session
 
 ## 核心模块说明
 
@@ -151,7 +156,8 @@ npm start
 ### Claude Code 会话管理 (`src/claude/session-manager.ts`)
 
 管理飞书 chat 到 Claude Code session 的映射：
-- 每个 chat 维护独立的 Claude Code 进程
+- 每个 (chat, 工作目录) 维护独立的 Claude Code 进程和会话
+- 支持 `/cd` 切换工作目录，自动 resume 已有 session
 - 自动创建/复用会话
 - 回复过长时自动分段发送
 - 优雅关闭所有会话
@@ -184,7 +190,8 @@ Claude Code CLI 连接的 WebSocket 端点：
 处理接收到的消息事件：
 - 消息去重（基于 message_id）
 - 解析消息内容
-- 命令分发（`/new`、`/reset`、`/status`）
+- 命令分发（`/new`、`/status`、`/cd`）
+- `/cd` 路径解析（绝对路径或基于 `CLAUDE_WORK_ROOT` 的相对路径）
 - 转发用户消息到 Claude Code 会话
 
 ### 消息服务 (`src/services/message.service.ts`)
@@ -201,6 +208,7 @@ Claude Code CLI 连接的 WebSocket 端点：
 - 验证必需配置
 - 提供类型安全的配置访问
 - Claude Code WebSocket 端口配置（`CLAUDE_WS_PORT`，默认 9800）
+- Claude Code 工作根目录配置（`CLAUDE_WORK_ROOT`，默认 `process.cwd()`）
 
 ### 日志工具 (`src/utils/logger.ts`)
 

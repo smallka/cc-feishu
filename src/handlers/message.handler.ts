@@ -1,6 +1,9 @@
+import { existsSync, statSync } from 'fs';
+import { resolve, isAbsolute } from 'path';
 import logger from '../utils/logger';
 import { SessionManager } from '../claude/session-manager';
 import messageService from '../services/message.service';
+import config from '../config';
 
 let sessionManager: SessionManager | null = null;
 
@@ -28,6 +31,16 @@ interface MessageEvent {
   };
 }
 
+function resolveWorkPath(input: string): string | null {
+  const target = isAbsolute(input)
+    ? input
+    : resolve(config.claude.workRoot, input);
+  if (!existsSync(target) || !statSync(target).isDirectory()) {
+    return null;
+  }
+  return target;
+}
+
 export async function handleMessage(data: MessageEvent): Promise<void> {
   const { sender, message } = data;
 
@@ -37,7 +50,6 @@ export async function handleMessage(data: MessageEvent): Promise<void> {
     return;
   }
   processedMessages.add(message.message_id);
-  // 防止缓存无限增长
   if (processedMessages.size > MAX_CACHE_SIZE) {
     const first = processedMessages.values().next().value;
     if (first) processedMessages.delete(first);
@@ -62,24 +74,59 @@ export async function handleMessage(data: MessageEvent): Promise<void> {
   const text = (content.text || '').trim();
   if (!text) return;
 
+  const chatId = message.chat_id;
+
   // 命令处理
-  if (text === '/new' || text === '/reset') {
-    await sessionManager?.resetSession(message.chat_id);
-    await messageService.sendTextMessage(message.chat_id, '会话已重置，可以开始新的对话。');
+  if (text === '/new') {
+    await sessionManager?.resetSession(chatId);
+    const cwd = sessionManager?.getCwd(chatId) ?? config.claude.workRoot;
+    await messageService.sendTextMessage(chatId, `会话已重置，可以开始新的对话。\n工作目录: ${cwd}`);
     return;
   }
 
   if (text === '/status') {
-    const info = sessionManager?.getSessionInfo(message.chat_id) || '未初始化';
-    await messageService.sendTextMessage(message.chat_id, info);
+    const info = sessionManager?.getSessionInfo(chatId) || '未初始化';
+    await messageService.sendTextMessage(chatId, info);
+    return;
+  }
+
+  if (text === '/cd') {
+    const cwds = sessionManager?.listCwds(chatId) ?? [];
+    if (cwds.length === 0) {
+      await messageService.sendTextMessage(chatId, `当前没有已记录的工作目录。\n用法: /cd <路径>`);
+    } else {
+      const currentCwd = sessionManager?.getCwd(chatId);
+      const list = cwds.map(c => c === currentCwd ? `👉 ${c}` : `   ${c}`).join('\n');
+      await messageService.sendTextMessage(chatId, `已记录的工作目录:\n${list}\n\n用 /cd <路径> 切换`);
+    }
+    return;
+  }
+
+  if (text.startsWith('/cd ')) {
+    const input = text.slice(4).trim();
+    if (!input) {
+      await messageService.sendTextMessage(chatId, '用法: /cd <路径>');
+      return;
+    }
+    const target = resolveWorkPath(input);
+    if (!target) {
+      await messageService.sendTextMessage(chatId, `目录不存在: ${input}`);
+      return;
+    }
+    if (!sessionManager) {
+      await messageService.sendTextMessage(chatId, 'Claude Code 服务未就绪，请稍后再试。');
+      return;
+    }
+    await sessionManager.switchCwd(chatId, target);
+    await messageService.sendTextMessage(chatId, `工作目录已切换到: ${target}`);
     return;
   }
 
   if (!sessionManager) {
-    await messageService.sendTextMessage(message.chat_id, 'Claude Code 服务未就绪，请稍后再试。');
+    await messageService.sendTextMessage(chatId, 'Claude Code 服务未就绪，请稍后再试。');
     return;
   }
 
   // 转发给 Claude Code
-  await sessionManager.sendMessage(message.chat_id, text);
+  await sessionManager.sendMessage(chatId, text);
 }
