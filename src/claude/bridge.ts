@@ -9,11 +9,15 @@ export class CLIBridge {
   private pendingMessages: string[] = [];
   private collectedText: string[] = [];
   private onResponse: OnResponseCallback | null = null;
-  private cliSessionId: string = '';
+  private initialized = false;
   readonly sessionId: string;
 
   constructor(sessionId: string) {
     this.sessionId = sessionId;
+  }
+
+  isInitialized(): boolean {
+    return this.initialized;
   }
 
   setOnResponse(cb: OnResponseCallback) {
@@ -38,7 +42,7 @@ export class CLIBridge {
       type: 'user',
       message: { role: 'user', content: text },
       parent_tool_use_id: null,
-      session_id: this.cliSessionId || '',
+      session_id: this.sessionId,
     });
     this.collectedText = [];
     this.sendRaw(ndjson);
@@ -61,7 +65,7 @@ export class CLIBridge {
     switch (msg.type) {
       case 'system':
         if ('subtype' in msg && msg.subtype === 'init') {
-          this.cliSessionId = msg.session_id;
+          this.initialized = true;
           logger.info('CLI session initialized', {
             sessionId: this.sessionId,
             model: msg.model,

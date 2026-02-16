@@ -1,15 +1,27 @@
 import { spawn, ChildProcess } from 'child_process';
 import logger from '../utils/logger';
 
+export interface LaunchOptions {
+  wsPort: number;
+  resume?: boolean;
+  cwd?: string;
+}
+
 export class CLILauncher {
   private process: ChildProcess | null = null;
+  private exitCallback: ((code: number | null) => void) | null = null;
   readonly sessionId: string;
 
   constructor(sessionId: string) {
     this.sessionId = sessionId;
   }
 
-  start(wsPort: number, cwd?: string): void {
+  onExit(cb: (code: number | null) => void): void {
+    this.exitCallback = cb;
+  }
+
+  start(options: LaunchOptions): void {
+    const { wsPort, resume, cwd } = options;
     const sdkUrl = `ws://localhost:${wsPort}/ws/cli/${this.sessionId}`;
 
     const args = [
@@ -18,17 +30,24 @@ export class CLILauncher {
       '--output-format', 'stream-json',
       '--input-format', 'stream-json',
       '--verbose',
-      '-p', '',
     ];
 
-    logger.info('Spawning Claude Code CLI', { sessionId: this.sessionId, sdkUrl });
+    if (resume) {
+      args.push('--resume', this.sessionId);
+    } else {
+      args.push('--session-id', this.sessionId);
+    }
+
+    args.push('-p', '');
+
+    logger.info('Spawning Claude Code CLI', { sessionId: this.sessionId, resume: !!resume, sdkUrl });
 
     // 清除 CLAUDECODE 环境变量，避免嵌套会话检测
     const env = { ...process.env };
     delete env.CLAUDECODE;
 
     this.process = spawn('claude', args, {
-      cwd: cwd || process.cwd(),
+      cwd: cwd ?? process.cwd(),
       env,
       stdio: ['pipe', 'pipe', 'pipe'],
       shell: true,
@@ -47,6 +66,7 @@ export class CLILauncher {
     this.process.on('exit', (code) => {
       logger.info('CLI process exited', { sessionId: this.sessionId, code });
       this.process = null;
+      this.exitCallback?.(code);
     });
 
     this.process.on('error', (err) => {
