@@ -8,6 +8,7 @@ import {
   getCurrentCwd, setCurrentCwd, getAllCwds,
 } from './session-store';
 import messageService from '../services/message.service';
+import { StreamingCard } from '../services/streaming-card';
 import config from '../config';
 
 interface Session {
@@ -20,6 +21,7 @@ interface Session {
 
 export class SessionManager {
   private sessions = new Map<string, Session>(); // chatId -> active Session
+  private streamingCards = new Map<string, StreamingCard>(); // chatId -> active StreamingCard
   private wsServer: ClaudeWsServer;
   private wsPort: number;
   private defaultCwd: string;
@@ -66,6 +68,12 @@ export class SessionManager {
   }
 
   async switchCwd(chatId: string, newCwd: string): Promise<void> {
+    const card = this.streamingCards.get(chatId);
+    if (card) {
+      await card.close('(已切换工作目录)').catch(() => {});
+      this.streamingCards.delete(chatId);
+    }
+
     // 杀掉当前活跃的 CLI
     const current = this.sessions.get(chatId);
     if (current) {
@@ -82,6 +90,12 @@ export class SessionManager {
   }
 
   async resetSession(chatId: string): Promise<void> {
+    const card = this.streamingCards.get(chatId);
+    if (card) {
+      await card.close('(会话已重置)').catch(() => {});
+      this.streamingCards.delete(chatId);
+    }
+
     const cwd = this.getCwd(chatId);
     const session = this.sessions.get(chatId);
     if (session) {
@@ -127,16 +141,40 @@ export class SessionManager {
     const bridge = new CLIBridge(sessionId);
     const launcher = new CLILauncher(sessionId);
 
-    bridge.setOnResponse((text) => {
-      const MAX_LEN = 4000;
-      if (text.length <= MAX_LEN) {
-        messageService.sendTextMessage(chatId, text).catch(err => {
-          logger.error('Failed to send response', { chatId, error: err.message });
-        });
-      } else {
-        this.sendLongMessage(chatId, text, MAX_LEN);
-      }
-    });
+    if (config.streaming.enabled) {
+      bridge.setOnPartialText(async (accumulatedText) => {
+        let card = this.streamingCards.get(chatId);
+        if (!card) {
+          // 先占位防止并发重入创建多张卡片
+          card = new StreamingCard(chatId);
+          this.streamingCards.set(chatId, card);
+          const ok = await card.start();
+          if (!ok) {
+            this.streamingCards.delete(chatId);
+            return; // 创建失败，onResponse 时降级为纯文本
+          }
+        }
+        card.update(accumulatedText);
+      });
+
+      bridge.setOnResponse((text) => {
+        const card = this.streamingCards.get(chatId);
+        this.streamingCards.delete(chatId);
+
+        if (card && card.isActive()) {
+          card.close(text).catch(err => {
+            logger.error('Failed to close streaming card, fallback to text', { chatId, error: err.message });
+            this.sendPlainText(chatId, text);
+          });
+        } else {
+          this.sendPlainText(chatId, text);
+        }
+      });
+    } else {
+      bridge.setOnResponse((text) => {
+        this.sendPlainText(chatId, text);
+      });
+    }
 
     launcher.onExit((code) => {
       if (!bridge.isInitialized()) {
@@ -161,6 +199,17 @@ export class SessionManager {
     return session;
   }
 
+  private sendPlainText(chatId: string, text: string): void {
+    const MAX_LEN = 4000;
+    if (text.length <= MAX_LEN) {
+      messageService.sendTextMessage(chatId, text).catch(err => {
+        logger.error('Failed to send response', { chatId, error: err.message });
+      });
+    } else {
+      this.sendLongMessage(chatId, text, MAX_LEN);
+    }
+  }
+
   private async sendLongMessage(chatId: string, text: string, maxLen: number) {
     for (let i = 0; i < text.length; i += maxLen) {
       const chunk = text.slice(i, i + maxLen);
@@ -180,6 +229,11 @@ export class SessionManager {
   }
 
   async stop(): Promise<void> {
+    for (const [, card] of this.streamingCards) {
+      await card.close('(服务关闭)').catch(() => {});
+    }
+    this.streamingCards.clear();
+
     for (const session of this.sessions.values()) {
       await session.launcher.kill();
     }

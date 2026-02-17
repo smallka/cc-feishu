@@ -11,6 +11,10 @@ interface Config {
     wsPort: number;
     workRoot: string;
   };
+  streaming: {
+    enabled: boolean;
+    throttleMs: number;
+  };
   app: {
     env: string;
     logLevel: string;
@@ -25,6 +29,10 @@ const config: Config = {
   claude: {
     wsPort: parseInt(process.env.CLAUDE_WS_PORT || '9800', 10),
     workRoot: process.env.CLAUDE_WORK_ROOT || process.cwd(),
+  },
+  streaming: {
+    enabled: process.env.STREAMING_ENABLED !== 'false',
+    throttleMs: parseInt(process.env.STREAMING_THROTTLE_MS || '150', 10),
   },
   app: {
     env: process.env.NODE_ENV || 'development',

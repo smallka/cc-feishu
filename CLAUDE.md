@@ -33,7 +33,8 @@ cc-feishu/
 │   ├── handlers/
 │   │   └── message.handler.ts  # 消息事件处理
 │   ├── services/
-│   │   └── message.service.ts  # 消息发送服务
+│   │   ├── message.service.ts  # 消息发送服务
+│   │   └── streaming-card.ts   # 流式卡片（Card Kit streaming）
 │   └── utils/
 │       └── logger.ts           # 日志工具
 ├── .env                         # 环境变量（需自行创建）
@@ -66,6 +67,8 @@ FEISHU_APP_ID=cli_xxxxxxxxxx
 FEISHU_APP_SECRET=xxxxxxxxxxxxxx
 CLAUDE_WS_PORT=9800
 CLAUDE_WORK_ROOT=/path/to/your/projects
+STREAMING_ENABLED=true
+STREAMING_THROTTLE_MS=150
 NODE_ENV=development
 LOG_LEVEL=info
 ```
@@ -86,6 +89,7 @@ LOG_LEVEL=info
 3. **配置权限**
    - 添加 `im:message` 权限（接收消息）
    - 添加 `im:message:send_as_bot` 权限（发送消息）
+   - 添加 `cardkit:card:write` 权限（创建与更新卡片，流式输出需要）
 
 4. **发布应用**
    - 发布应用并在企业内可用
@@ -123,6 +127,7 @@ npm start
 - ✅ 工具权限自动批准
 - ✅ 长消息自动分段发送（飞书 4000 字符限制）
 - ✅ 消息去重（防止飞书重复投递）
+- ✅ 流式输出（Card Kit streaming，打字机效果实时显示）
 - ✅ 命令支持（`/help`、`/new`、`/status`、`/cd`）
 - ✅ 结构化日志记录
 - ✅ 优雅关闭（Ctrl+C）
@@ -133,7 +138,8 @@ npm start
 飞书用户发消息 → 飞书服务器 → (SDK WebSocket) → cc-feishu bot
     → SessionManager → Claude Code CLI (--sdk-url)
     → 本地 WebSocket Server → CLIBridge (NDJSON 协议)
-    → 收集完整回复 → 发回飞书
+    → 流式卡片实时更新（Card Kit streaming）
+    → CLI 返回 result → 关闭流式模式 → 最终卡片
 ```
 
 ### 命令
@@ -202,6 +208,15 @@ Claude Code CLI 连接的 WebSocket 端点：
 - 统一错误处理
 - 日志记录
 
+### 流式卡片 (`src/services/streaming-card.ts`)
+
+基于飞书 Card Kit API 实现流式输出：
+- 创建流式卡片实体（`streaming_mode: true`）
+- 节流更新卡片内容（默认 150ms，最多 10次/秒）
+- Promise 队列串行化更新请求
+- 关闭流式模式并更新摘要
+- 失败时自动降级为纯文本发送
+
 ### 配置管理 (`src/config/index.ts`)
 
 集中管理应用配置：
@@ -210,6 +225,8 @@ Claude Code CLI 连接的 WebSocket 端点：
 - 提供类型安全的配置访问
 - Claude Code WebSocket 端口配置（`CLAUDE_WS_PORT`，默认 9800）
 - Claude Code 工作根目录配置（`CLAUDE_WORK_ROOT`，默认 `process.cwd()`）
+- 流式输出开关（`STREAMING_ENABLED`，默认 true）
+- 流式更新节流间隔（`STREAMING_THROTTLE_MS`，默认 150ms）
 
 ### 日志工具 (`src/utils/logger.ts`)
 
@@ -295,7 +312,7 @@ const eventDispatcher = new lark.EventDispatcher({}).register({
 ### 短期扩展
 
 - 支持更多消息类型（图片、文件、富文本）
-- 流式输出（通过飞书卡片消息更新）
+- 流式输出完成后追加评价按钮（卡片交互回调）
 - 会话超时自动清理
 - 添加消息模板
 
