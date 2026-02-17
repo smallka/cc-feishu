@@ -77,6 +77,19 @@ export async function handleMessage(data: MessageEvent): Promise<void> {
   const chatId = message.chat_id;
 
   // 命令处理
+  if (text === '/help') {
+    const helpText = [
+      '可用命令:',
+      '/help — 显示本帮助信息',
+      '/new — 重置当前会话，开始新对话',
+      '/status — 查看当前会话状态和工作目录',
+      '/cd — 列出所有已记录的工作目录',
+      '/cd <路径> — 切换工作目录（绝对路径或相对路径）',
+    ].join('\n');
+    await messageService.sendTextMessage(chatId, helpText);
+    return;
+  }
+
   if (text === '/new') {
     await sessionManager?.resetSession(chatId);
     const cwd = sessionManager?.getCwd(chatId) ?? config.claude.workRoot;
