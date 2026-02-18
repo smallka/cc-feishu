@@ -7,6 +7,7 @@ import {
   getSessionId, setSessionId, removeSessionId,
   getCurrentCwd, setCurrentCwd, getAllCwds,
 } from './session-store';
+import { scanSessions, SessionSummary } from './session-scanner';
 import messageService from '../services/message.service';
 import { StreamingCard } from '../services/streaming-card';
 import config from '../config';
@@ -122,6 +123,40 @@ export class SessionManager {
     return getAllCwds(chatId);
   }
 
+  listResumableSessions(chatId: string): SessionSummary[] {
+    const cwd = this.getCwd(chatId);
+    const currentSessionId = this.sessions.get(chatId)?.sessionId
+      ?? getSessionId(chatId, cwd);
+    return scanSessions(cwd).filter(s => s.sessionId !== currentSessionId);
+  }
+
+  async resumeSession(chatId: string, sessionId: string): Promise<boolean> {
+    const card = this.streamingCards.get(chatId);
+    if (card) {
+      await card.close('(正在恢复会话)').catch(() => {});
+      this.streamingCards.delete(chatId);
+    }
+
+    const current = this.sessions.get(chatId);
+    if (current) {
+      await current.launcher.kill();
+      current.bridge.detachSocket();
+      this.sessions.delete(chatId);
+    }
+
+    const cwd = this.getCwd(chatId);
+    // 更新 store 映射，使 getOrCreateSession 能以 resume 模式启动
+    setSessionId(chatId, cwd, sessionId, this.defaultCwd);
+    const session = this.getOrCreateSession(chatId, cwd);
+
+    try {
+      await session.bridge.waitForInit();
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   private getOrCreateSession(chatId: string, cwd: string): Session {
     let session = this.sessions.get(chatId);
     if (session && session.cwd === cwd && session.launcher.isAlive()) {
@@ -178,6 +213,7 @@ export class SessionManager {
 
     launcher.onExit((code) => {
       if (!bridge.isInitialized()) {
+        bridge.rejectInit('CLI exited before init');
         if (resume) {
           logger.warn('Resume failed, clearing stored session', { chatId, sessionId, cwd, code });
           removeSessionId(chatId, cwd);

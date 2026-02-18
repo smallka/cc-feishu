@@ -82,6 +82,8 @@ export async function handleMessage(data: MessageEvent): Promise<void> {
       '可用命令:',
       '/help — 显示本帮助信息',
       '/new — 重置当前会话，开始新对话',
+      '/resume — 列出可恢复的历史会话',
+      '/resume <序号> — 恢复指定的历史会话',
       '/status — 查看当前会话状态和工作目录',
       '/cd — 列出所有已记录的工作目录',
       '/cd <路径> — 切换工作目录（绝对路径或相对路径）',
@@ -132,6 +134,57 @@ export async function handleMessage(data: MessageEvent): Promise<void> {
     }
     await sessionManager.switchCwd(chatId, target);
     await messageService.sendTextMessage(chatId, `工作目录已切换到: ${target}`);
+    return;
+  }
+
+  if (text === '/resume') {
+    if (!sessionManager) {
+      await messageService.sendTextMessage(chatId, 'Claude Code 服务未就绪，请稍后再试。');
+      return;
+    }
+    const sessions = sessionManager.listResumableSessions(chatId);
+    if (sessions.length === 0) {
+      await messageService.sendTextMessage(chatId, '当前工作目录下没有可恢复的会话。');
+      return;
+    }
+    const list = sessions.map((s, i) => {
+      const date = new Date(s.timestamp);
+      const ts = `${(date.getMonth() + 1).toString().padStart(2, '0')}-${date.getDate().toString().padStart(2, '0')} ${date.getHours().toString().padStart(2, '0')}:${date.getMinutes().toString().padStart(2, '0')}`;
+      return `${i + 1}. [${ts}] "${s.firstMessage}" (${s.sessionId.slice(0, 8)})`;
+    }).join('\n');
+    await messageService.sendTextMessage(chatId, `可恢复的会话:\n${list}\n\n用 /resume <序号> 恢复`);
+    return;
+  }
+
+  if (text.startsWith('/resume ')) {
+    const arg = text.slice(8).trim();
+    if (!arg) {
+      await messageService.sendTextMessage(chatId, '用法: /resume <序号>');
+      return;
+    }
+    if (!sessionManager) {
+      await messageService.sendTextMessage(chatId, 'Claude Code 服务未就绪，请稍后再试。');
+      return;
+    }
+    const sessions = sessionManager.listResumableSessions(chatId);
+    const index = parseInt(arg, 10);
+    let targetSession: { sessionId: string } | undefined;
+    if (!isNaN(index) && index >= 1 && index <= sessions.length) {
+      targetSession = sessions[index - 1];
+    } else {
+      // 按 sessionId 前缀匹配
+      targetSession = sessions.find(s => s.sessionId.startsWith(arg));
+    }
+    if (!targetSession) {
+      await messageService.sendTextMessage(chatId, `未找到匹配的会话。用 /resume 查看可恢复列表。`);
+      return;
+    }
+    const ok = await sessionManager.resumeSession(chatId, targetSession.sessionId);
+    if (ok) {
+      await messageService.sendTextMessage(chatId, `会话已恢复: ${targetSession.sessionId.slice(0, 8)}`);
+    } else {
+      await messageService.sendTextMessage(chatId, `会话恢复失败（可能已过期），请用 /new 开始新对话。`);
+    }
     return;
   }
 

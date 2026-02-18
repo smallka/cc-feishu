@@ -12,6 +12,7 @@ export class CLIBridge {
   private onResponse: OnResponseCallback | null = null;
   private onPartialText: OnPartialTextCallback | null = null;
   private initialized = false;
+  private initWaiters: Array<{ resolve: () => void; reject: (err: Error) => void; timer: ReturnType<typeof setTimeout> }> = [];
   readonly sessionId: string;
 
   constructor(sessionId: string) {
@@ -20,6 +21,32 @@ export class CLIBridge {
 
   isInitialized(): boolean {
     return this.initialized;
+  }
+
+  /**
+   * 等待 CLI 初始化完成，超时则 reject
+   */
+  waitForInit(timeoutMs = 15000): Promise<void> {
+    if (this.initialized) return Promise.resolve();
+    return new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.initWaiters = this.initWaiters.filter(w => w.resolve !== resolve);
+        reject(new Error('CLI init timeout'));
+      }, timeoutMs);
+      this.initWaiters.push({ resolve, reject, timer });
+    });
+  }
+
+  /**
+   * 拒绝所有等待中的 init Promise（CLI 提前退出时调用）
+   */
+  rejectInit(reason: string): void {
+    const waiters = this.initWaiters;
+    this.initWaiters = [];
+    for (const w of waiters) {
+      clearTimeout(w.timer);
+      w.reject(new Error(reason));
+    }
   }
 
   setOnResponse(cb: OnResponseCallback) {
@@ -72,6 +99,12 @@ export class CLIBridge {
       case 'system':
         if ('subtype' in msg && msg.subtype === 'init') {
           this.initialized = true;
+          const waiters = this.initWaiters;
+          this.initWaiters = [];
+          for (const w of waiters) {
+            clearTimeout(w.timer);
+            w.resolve();
+          }
           logger.info('CLI session initialized', {
             sessionId: this.sessionId,
             model: msg.model,
