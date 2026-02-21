@@ -11,6 +11,7 @@ export class StreamingCard {
   private sequence = 0;
   private closed = false;
   private chatId: string;
+  private startPromise: Promise<boolean> | null = null;
 
   // 节流状态
   private pendingText: string | null = null;
@@ -24,6 +25,11 @@ export class StreamingCard {
 
   /** 创建卡片实体并发送到聊天，失败返回 false */
   async start(): Promise<boolean> {
+    this.startPromise = this.doStart();
+    return this.startPromise;
+  }
+
+  private async doStart(): Promise<boolean> {
     try {
       const client = feishuClient.getClient();
 
@@ -81,6 +87,12 @@ export class StreamingCard {
     }
   }
 
+  /** 等待 start 完成（供外部在 close 前调用） */
+  async waitForStart(): Promise<boolean> {
+    if (!this.startPromise) return false;
+    return this.startPromise.catch(() => false);
+  }
+
   /** 更新卡片内容（节流） */
   update(fullText: string): void {
     if (this.closed || !this.cardId) return;
@@ -111,7 +123,14 @@ export class StreamingCard {
       this.throttleTimer = null;
     }
 
-    if (!this.cardId) return;
+    // 等待 start 完成（处理 onResponse 在 start 未完成时触发的竞态）
+    if (this.startPromise) {
+      await this.startPromise.catch(() => {});
+    }
+
+    if (!this.cardId) {
+      throw new Error('Card was not started successfully');
+    }
 
     await this.updatePromise;
 

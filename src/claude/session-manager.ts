@@ -196,7 +196,7 @@ export class SessionManager {
         const card = this.streamingCards.get(chatId);
         this.streamingCards.delete(chatId);
 
-        if (card && card.isActive()) {
+        if (card) {
           card.close(text).catch(err => {
             logger.error('Failed to close streaming card, fallback to text', { chatId, error: err.message });
             this.sendPlainText(chatId, text);
