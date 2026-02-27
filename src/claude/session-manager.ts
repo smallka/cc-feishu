@@ -23,6 +23,7 @@ interface Session {
 export class SessionManager {
   private sessions = new Map<string, Session>(); // chatId -> active Session
   private streamingCards = new Map<string, StreamingCard>(); // chatId -> active StreamingCard
+  private pendingCallbacks = new Map<string, () => void>(); // chatId -> onDone callback
   private wsServer: ClaudeWsServer;
   private wsPort: number;
   private defaultCwd: string;
@@ -62,9 +63,12 @@ export class SessionManager {
     return getCurrentCwd(chatId) ?? this.defaultCwd;
   }
 
-  async sendMessage(chatId: string, text: string): Promise<void> {
+  async sendMessage(chatId: string, text: string, onDone?: () => void): Promise<void> {
     const cwd = this.getCwd(chatId);
     const session = this.getOrCreateSession(chatId, cwd);
+    if (onDone) {
+      this.pendingCallbacks.set(chatId, onDone);
+    }
     session.bridge.sendUserMessage(text);
   }
 
@@ -193,6 +197,10 @@ export class SessionManager {
       });
 
       bridge.setOnResponse((text) => {
+        const callback = this.pendingCallbacks.get(chatId);
+        this.pendingCallbacks.delete(chatId);
+        if (callback) callback();
+
         const card = this.streamingCards.get(chatId);
         this.streamingCards.delete(chatId);
 
@@ -207,6 +215,10 @@ export class SessionManager {
       });
     } else {
       bridge.setOnResponse((text) => {
+        const callback = this.pendingCallbacks.get(chatId);
+        this.pendingCallbacks.delete(chatId);
+        if (callback) callback();
+
         this.sendPlainText(chatId, text);
       });
     }

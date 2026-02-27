@@ -2,6 +2,33 @@ import feishuClient from '../bot/client';
 import logger from '../utils/logger';
 
 class MessageService {
+  // 给消息添加 emoji 反应，返回 reactionId
+  async addReaction(messageId: string, emojiType: string): Promise<string | null> {
+    try {
+      const client = feishuClient.getClient();
+      const res = await (client.im.messageReaction as any).create({
+        path: { message_id: messageId },
+        data: { reaction_type: { emoji_type: emojiType } },
+      });
+      return res?.data?.reaction_id ?? null;
+    } catch (error) {
+      logger.warn('Failed to add reaction', { messageId, emojiType, error });
+      return null;
+    }
+  }
+
+  // 移除消息的 emoji 反应
+  async removeReaction(messageId: string, reactionId: string): Promise<void> {
+    try {
+      const client = feishuClient.getClient();
+      await (client.im.messageReaction as any).delete({
+        path: { message_id: messageId, reaction_id: reactionId },
+      });
+    } catch (error) {
+      logger.warn('Failed to remove reaction', { messageId, reactionId, error });
+    }
+  }
+
   // 发送文本消息
   async sendTextMessage(chatId: string, text: string): Promise<void> {
     try {

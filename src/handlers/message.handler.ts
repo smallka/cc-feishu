@@ -194,5 +194,10 @@ export async function handleMessage(data: MessageEvent): Promise<void> {
   }
 
   // 转发给 Claude Code
-  await sessionManager.sendMessage(chatId, text);
+  const reactionId = await messageService.addReaction(message.message_id, 'Typing');
+  await sessionManager.sendMessage(chatId, text, async () => {
+    if (reactionId) {
+      await messageService.removeReaction(message.message_id, reactionId);
+    }
+  });
 }
