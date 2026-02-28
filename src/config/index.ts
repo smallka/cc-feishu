@@ -10,6 +10,7 @@ interface Config {
   claude: {
     wsPort: number;
     workRoot: string;
+    model: string;
   };
   streaming: {
     enabled: boolean;
@@ -29,6 +30,7 @@ const config: Config = {
   claude: {
     wsPort: parseInt(process.env.CLAUDE_WS_PORT || '9800', 10),
     workRoot: process.env.CLAUDE_WORK_ROOT || process.cwd(),
+    model: process.env.CLAUDE_MODEL || 'claude-opus-4-6',
   },
   streaming: {
     enabled: process.env.STREAMING_ENABLED !== 'false',

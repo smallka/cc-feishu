@@ -1,7 +1,9 @@
 {
   "permissions": {
     "allow": [
-      "WebFetch(domain:open.feishu.cn)"
+      "WebFetch(domain:open.feishu.cn)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)"
     ]
   }
 }

@@ -1,5 +1,6 @@
 import { spawn, ChildProcess } from 'child_process';
 import logger from '../utils/logger';
+import config from '../config';
 
 export interface LaunchOptions {
   wsPort: number;
@@ -30,6 +31,7 @@ export class CLILauncher {
       '--output-format', 'stream-json',
       '--input-format', 'stream-json',
       '--verbose',
+      '--model', config.claude.model,
     ];
 
     if (resume) {
