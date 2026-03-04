@@ -13,6 +13,7 @@ export class CLIBridge {
   private onPartialText: OnPartialTextCallback | null = null;
   private initialized = false;
   private initWaiters: Array<{ resolve: () => void; reject: (err: Error) => void; timer: ReturnType<typeof setTimeout> }> = [];
+  private lastResponseTime: number = Date.now();
   readonly sessionId: string;
 
   constructor(sessionId: string) {
@@ -21,6 +22,16 @@ export class CLIBridge {
 
   isInitialized(): boolean {
     return this.initialized;
+  }
+
+  getLastResponseTime(): number {
+    return this.lastResponseTime;
+  }
+
+  isHealthy(inactiveTimeout: number): boolean {
+    const now = Date.now();
+    const timeSinceLastResponse = now - this.lastResponseTime;
+    return timeSinceLastResponse < inactiveTimeout;
   }
 
   /**
@@ -95,6 +106,9 @@ export class CLIBridge {
   }
 
   private routeMessage(msg: CLIMessage) {
+    // 更新最后响应时间
+    this.lastResponseTime = Date.now();
+
     switch (msg.type) {
       case 'system':
         if ('subtype' in msg && msg.subtype === 'init') {

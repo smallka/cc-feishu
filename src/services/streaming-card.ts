@@ -10,6 +10,7 @@ export class StreamingCard {
   private cardId: string | null = null;
   private sequence = 0;
   private closed = false;
+  private closing = false; // 防止重复关闭
   private chatId: string;
   private startPromise: Promise<boolean> | null = null;
 
@@ -115,8 +116,16 @@ export class StreamingCard {
 
   /** 发送最终文本并关闭流式模式 */
   async close(finalText: string): Promise<void> {
-    if (this.closed) return;
-    this.closed = true;
+    if (this.closed || this.closing) {
+      logger.debug('Streaming card already closed or closing', {
+        chatId: this.chatId,
+        cardId: this.cardId,
+        closed: this.closed,
+        closing: this.closing,
+      });
+      return;
+    }
+    this.closing = true;
 
     if (this.throttleTimer) {
       clearTimeout(this.throttleTimer);
@@ -129,7 +138,9 @@ export class StreamingCard {
     }
 
     if (!this.cardId) {
-      throw new Error('Card was not started successfully');
+      logger.warn('Cannot close card: not started successfully', { chatId: this.chatId });
+      this.closed = true;
+      return;
     }
 
     await this.updatePromise;
@@ -164,9 +175,15 @@ export class StreamingCard {
         },
       });
 
-      logger.info('Streaming card closed', { cardId: this.cardId });
+      logger.info('Streaming card closed', { chatId: this.chatId, cardId: this.cardId });
     } catch (err: any) {
-      logger.error('Failed to close streaming card', { cardId: this.cardId, error: err.message });
+      logger.error('Failed to close streaming card', {
+        chatId: this.chatId,
+        cardId: this.cardId,
+        error: err.message
+      });
+    } finally {
+      this.closed = true;
     }
   }
 

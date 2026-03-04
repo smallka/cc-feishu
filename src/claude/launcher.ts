@@ -10,7 +10,7 @@ export interface LaunchOptions {
 
 export class CLILauncher {
   private process: ChildProcess | null = null;
-  private exitCallback: ((code: number | null) => void) | null = null;
+  private exitCallbacks: Array<(code: number | null) => void> = [];
   readonly sessionId: string;
 
   constructor(sessionId: string) {
@@ -18,7 +18,7 @@ export class CLILauncher {
   }
 
   onExit(cb: (code: number | null) => void): void {
-    this.exitCallback = cb;
+    this.exitCallbacks.push(cb);
   }
 
   start(options: LaunchOptions): void {
@@ -68,7 +68,14 @@ export class CLILauncher {
     this.process.on('exit', (code) => {
       logger.info('CLI process exited', { sessionId: this.sessionId, code });
       this.process = null;
-      this.exitCallback?.(code);
+      // 触发所有退出回调
+      for (const cb of this.exitCallbacks) {
+        try {
+          cb(code);
+        } catch (err) {
+          logger.error('Error in exit callback', { sessionId: this.sessionId, error: err });
+        }
+      }
     });
 
     this.process.on('error', (err) => {
