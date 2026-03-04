@@ -6,11 +6,20 @@ interface Config {
   feishu: {
     appId: string;
     appSecret: string;
+    healthCheckInterval: number;
+    heartbeatTimeout: number;
   };
   claude: {
     wsPort: number;
     workRoot: string;
-    model: string;
+    model: string; // 运行时可变
+    messageTimeout: number;
+    messageTimeoutAction: 'notify' | 'kill';
+    healthCheckInterval: number;
+    inactiveTimeout: number;
+    idleTimeout: number;
+    idleCleanupInterval: number;
+    notifyBeforeCleanup: boolean;
   };
   streaming: {
     enabled: boolean;
@@ -22,15 +31,30 @@ interface Config {
   };
 }
 
+// 模型映射表
+export const MODEL_MAP: Record<string, string> = {
+  'opus': 'claude-opus-4-6',
+  'sonnet': 'claude-sonnet-4-6',
+};
+
 const config: Config = {
   feishu: {
     appId: process.env.FEISHU_APP_ID || '',
     appSecret: process.env.FEISHU_APP_SECRET || '',
+    healthCheckInterval: parseInt(process.env.FEISHU_HEALTH_CHECK_INTERVAL || '60000', 10),
+    heartbeatTimeout: parseInt(process.env.FEISHU_HEARTBEAT_TIMEOUT || '300000', 10),
   },
   claude: {
     wsPort: parseInt(process.env.CLAUDE_WS_PORT || '9800', 10),
     workRoot: process.env.CLAUDE_WORK_ROOT || process.cwd(),
     model: process.env.CLAUDE_MODEL || 'claude-opus-4-6',
+    messageTimeout: parseInt(process.env.MESSAGE_TIMEOUT || '300000', 10),
+    messageTimeoutAction: (process.env.MESSAGE_TIMEOUT_ACTION || 'notify') as 'notify' | 'kill',
+    healthCheckInterval: parseInt(process.env.CLI_HEALTH_CHECK_INTERVAL || '120000', 10),
+    inactiveTimeout: parseInt(process.env.CLI_INACTIVE_TIMEOUT || '300000', 10),
+    idleTimeout: parseInt(process.env.SESSION_IDLE_TIMEOUT || '3600000', 10),
+    idleCleanupInterval: parseInt(process.env.SESSION_IDLE_CLEANUP_INTERVAL || '300000', 10),
+    notifyBeforeCleanup: process.env.SESSION_NOTIFY_BEFORE_CLEANUP !== 'false',
   },
   streaming: {
     enabled: process.env.STREAMING_ENABLED !== 'false',

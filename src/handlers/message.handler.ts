@@ -3,7 +3,7 @@ import { resolve, isAbsolute } from 'path';
 import logger from '../utils/logger';
 import { SessionManager } from '../claude/session-manager';
 import messageService from '../services/message.service';
-import config from '../config';
+import config, { MODEL_MAP } from '../config';
 
 let sessionManager: SessionManager | null = null;
 
@@ -42,6 +42,7 @@ function resolveWorkPath(input: string): string | null {
 }
 
 export async function handleMessage(data: MessageEvent): Promise<void> {
+  const startTime = Date.now();
   const { sender, message } = data;
 
   // 消息去重
@@ -60,6 +61,54 @@ export async function handleMessage(data: MessageEvent): Promise<void> {
     chatId: message.chat_id,
     senderId: sender.sender_id.open_id,
   });
+
+  // 包装超时保护
+  const timeout = config.claude.messageTimeout;
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    setTimeout(() => {
+      reject(new Error('Message processing timeout'));
+    }, timeout);
+  });
+
+  try {
+    await Promise.race([
+      handleMessageInternal(data, startTime),
+      timeoutPromise,
+    ]);
+  } catch (error) {
+    const duration = Date.now() - startTime;
+    if (error instanceof Error && error.message === 'Message processing timeout') {
+      logger.error('Message processing timeout', {
+        messageId: message.message_id,
+        chatId: message.chat_id,
+        duration,
+        timeout,
+      });
+
+      // 关闭流式卡片
+      await sessionManager?.closeStreamingCard(message.chat_id);
+
+      // 发送超时提示
+      await messageService.sendTextMessage(
+        message.chat_id,
+        `⚠️ 消息处理超时（${Math.round(timeout / 1000)}秒），已终止处理。请重试或使用 /new 重置会话。`
+      ).catch(err => {
+        logger.error('Failed to send timeout notification', { error: err });
+      });
+
+      // 根据配置决定是否终止会话
+      if (config.claude.messageTimeoutAction === 'kill') {
+        logger.info('Terminating session due to timeout', { chatId: message.chat_id });
+        await sessionManager?.resetSession(message.chat_id);
+      }
+    } else {
+      logger.error('Error handling message event', { error, duration });
+    }
+  }
+}
+
+async function handleMessageInternal(data: MessageEvent, startTime: number): Promise<void> {
+  const { message } = data;
 
   if (message.message_type !== 'text') return;
 
@@ -87,6 +136,8 @@ export async function handleMessage(data: MessageEvent): Promise<void> {
       '/status — 查看当前会话状态和工作目录',
       '/cd — 列出所有已记录的工作目录',
       '/cd <路径> — 切换工作目录（绝对路径或相对路径）',
+      '/model opus — 切换到 Opus 4.6 模型',
+      '/model sonnet — 切换到 Sonnet 4.6 模型',
     ].join('\n');
     await messageService.sendTextMessage(chatId, helpText);
     return;
@@ -134,6 +185,44 @@ export async function handleMessage(data: MessageEvent): Promise<void> {
     }
     await sessionManager.switchCwd(chatId, target);
     await messageService.sendTextMessage(chatId, `工作目录已切换到: ${target}`);
+    return;
+  }
+
+  if (text.startsWith('/model ')) {
+    const modelKey = text.slice(7).trim().toLowerCase();
+    if (!MODEL_MAP[modelKey]) {
+      await messageService.sendTextMessage(
+        chatId,
+        `无效的模型，请使用:\n/model opus — 切换到 Opus 4.6\n/model sonnet — 切换到 Sonnet 4.6`
+      );
+      return;
+    }
+
+    const newModel = MODEL_MAP[modelKey];
+    const oldModel = config.claude.model;
+
+    if (newModel === oldModel) {
+      await messageService.sendTextMessage(chatId, `当前已经是 ${modelKey.toUpperCase()} 模型`);
+      return;
+    }
+
+    // 修改全局配置
+    config.claude.model = newModel;
+    logger.info('Model changed globally', { oldModel, newModel, requestedBy: chatId });
+
+    // 重启所有活跃会话
+    const affectedChats = await sessionManager?.restartAllSessions() ?? [];
+
+    // 通知所有受影响的 chat
+    for (const affectedChatId of affectedChats) {
+      await messageService.sendTextMessage(
+        affectedChatId,
+        `🔄 模型已切换为 ${modelKey.toUpperCase()}，会话已重启`
+      ).catch(err => {
+        logger.error('Failed to notify chat about model change', { chatId: affectedChatId, error: err });
+      });
+    }
+
     return;
   }
 
@@ -200,4 +289,16 @@ export async function handleMessage(data: MessageEvent): Promise<void> {
       await messageService.removeReaction(message.message_id, reactionId);
     }
   });
+
+  // 记录处理时长
+  const duration = Date.now() - startTime;
+  const timeout = config.claude.messageTimeout;
+  if (duration > timeout * 0.5) {
+    logger.warn('Message processing took long time', {
+      messageId: message.message_id,
+      chatId,
+      duration,
+      threshold: timeout * 0.5,
+    });
+  }
 }
