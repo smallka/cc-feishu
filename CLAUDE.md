@@ -345,6 +345,30 @@ const eventDispatcher = new lark.EventDispatcher({}).register({
 - **错误处理**: 统一的错误处理和日志记录
 - **类型安全**: 使用 TypeScript 严格模式
 
+## 核心协议文档
+
+### Claude Code WebSocket 协议
+
+本项目使用 Claude Code CLI 的 `--sdk-url` 参数建立 WebSocket 连接。完整的协议规范请参考：
+
+📄 **[docs/WEBSOCKET_PROTOCOL_REVERSED.md](docs/WEBSOCKET_PROTOCOL_REVERSED.md)**
+
+该文档详细描述了：
+- NDJSON 消息格式（13 种消息类型）
+- 控制协议（13 种子类型）
+- 权限审批流程（`can_use_tool`）
+- 会话管理和恢复
+- 重连和容错机制
+- 完整的 TypeScript 类型定义
+
+**关键要点**：
+- 协议基于 NDJSON（每行一个 JSON 对象）
+- CLI 作为 WebSocket 客户端连接到我们的服务器
+- 首条消息必须是 `user` 消息，CLI 响应 `system/init`
+- 工具权限通过 `control_request/can_use_tool` 请求
+- 响应必须包含 `updatedInput`（即使不修改）
+- 支持会话恢复（`--resume <session-id>`）
+
 ## 许可证
 
 MIT
