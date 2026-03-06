@@ -78,6 +78,38 @@ export class SessionManager {
     session.bridge.sendUserMessage(text);
   }
 
+  /**
+   * 打断指定会话的当前任务
+   * @returns 'success' | 'no_session' | 'not_running'
+   */
+  interruptSession(chatId: string): 'success' | 'no_session' | 'not_running' {
+    const session = this.sessions.get(chatId);
+    if (!session) {
+      logger.warn('[SessionManager] 会话不存在，无法打断', { chatId });
+      return 'no_session';
+    }
+
+    if (!session.bridge.canInterrupt()) {
+      logger.warn('[SessionManager] AI 未在执行任务，无法打断', {
+        chatId,
+        sessionId: session.sessionId,
+      });
+      return 'not_running';
+    }
+
+    const success = session.bridge.sendInterrupt();
+    if (success) {
+      logger.info('[SessionManager] 已打断会话', {
+        chatId,
+        sessionId: session.sessionId,
+        cwd: session.cwd,
+      });
+      return 'success';
+    }
+
+    return 'not_running';
+  }
+
   async switchCwd(chatId: string, newCwd: string): Promise<void> {
     const card = this.streamingCards.get(chatId);
     if (card) {

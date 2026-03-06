@@ -131,6 +131,7 @@ async function handleMessageInternal(data: MessageEvent, startTime: number): Pro
       '可用命令:',
       '/help — 显示本帮助信息',
       '/new — 重置当前会话，开始新对话',
+      '/stop — 打断 AI 当前任务（不销毁会话）',
       '/resume — 列出可恢复的历史会话',
       '/resume <序号> — 恢复指定的历史会话',
       '/status — 查看当前会话状态和工作目录',
@@ -140,6 +141,22 @@ async function handleMessageInternal(data: MessageEvent, startTime: number): Pro
       '/model sonnet — 切换到 Sonnet 4.6 模型',
     ].join('\n');
     await messageService.sendTextMessage(chatId, helpText);
+    return;
+  }
+
+  if (text === '/stop') {
+    if (!sessionManager) {
+      await messageService.sendTextMessage(chatId, 'Claude Code 服务未就绪。');
+      return;
+    }
+    const result = sessionManager.interruptSession(chatId);
+    if (result === 'success') {
+      await messageService.sendTextMessage(chatId, '⏸️ 已发送打断指令，AI 将停止当前任务');
+    } else if (result === 'no_session') {
+      await messageService.sendTextMessage(chatId, '❌ 当前没有活跃的会话');
+    } else {
+      await messageService.sendTextMessage(chatId, '⚠️ AI 当前未在执行任务，无需打断\n\n提示：只有在 AI 正在思考或执行工具时才能打断');
+    }
     return;
   }
 

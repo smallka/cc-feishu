@@ -1,3 +1,4 @@
+import { randomUUID } from 'crypto';
 import { WebSocket } from 'ws';
 import logger from '../utils/logger';
 import type { CLIMessage, CLIAssistantMessage, CLIControlRequestMessage } from './types';
@@ -184,6 +185,39 @@ export class CLIBridge {
       sessionId: this.sessionId,
     });
     this.sendRaw(ndjson);
+  }
+
+  /**
+   * 检查是否可以发送打断请求（WebSocket 是否连接）
+   */
+  canInterrupt(): boolean {
+    return this.ws !== null && this.ws.readyState === WebSocket.OPEN;
+  }
+
+  /**
+   * 发送打断请求，中止当前 agent 回合
+   * @returns 是否成功发送
+   */
+  sendInterrupt(): boolean {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      logger.warn('[CLIBridge] WebSocket 未连接，无法发送打断请求', {
+        sessionId: this.sessionId,
+        wsState: this.ws?.readyState,
+      });
+      return false;
+    }
+
+    const interruptRequest = {
+      type: 'control_request',
+      request_id: randomUUID(),
+      request: { subtype: 'interrupt' },
+    };
+
+    this.ws.send(JSON.stringify(interruptRequest) + '\n');
+    logger.info('[CLIBridge] 已发送打断请求', {
+      sessionId: this.sessionId,
+    });
+    return true;
   }
 
   private sendRaw(ndjson: string) {
