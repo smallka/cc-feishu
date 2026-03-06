@@ -277,6 +277,12 @@ async function handleMessageInternal(data: MessageEvent, startTime: number): Pro
     return;
   }
 
+  // 未知命令拦截
+  if (text.startsWith('/')) {
+    await messageService.sendTextMessage(chatId, `未知命令: ${text.split(' ')[0]}\n输入 /help 查看可用命令。`);
+    return;
+  }
+
   if (!sessionManager) {
     await messageService.sendTextMessage(chatId, 'Claude Code 服务未就绪，请稍后再试。');
     return;
