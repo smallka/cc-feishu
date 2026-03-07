@@ -388,6 +388,85 @@ Anthropic 官方的 Python SDK 实现提供了重要的参考价值：
 
 MIT
 
+## 开发规范
+
+### 日志规范
+
+本项目使用 Winston 进行结构化日志记录，要求：
+
+#### 日志级别
+
+- **DEBUG**：详细的执行流程、函数参数、状态变化、协议消息元数据
+- **INFO**：关键操作、会话生命周期、命令执行结果
+- **WARN**：可恢复的异常、降级处理
+- **ERROR**：错误和异常
+
+#### 日志上下文
+
+每条日志必须包含相关的上下文信息，方便追踪和关联：
+
+**通用字段**：
+- `module` - 模块名称（如 AgentManager、ChatSessionManager）
+
+**Agent 相关**：
+- `agentId` - agent ID
+- `sessionId` - Claude session ID
+- `cwd` - 工作目录
+- `processId` - CLI 进程 PID
+
+**Chat 相关**：
+- `chatId` - 飞书 chat ID
+- `userId` - 用户 ID（如果有）
+
+**消息相关**：
+- `messageType` - 消息类型（user/assistant/system/control_request 等）
+- `messageLength` - 消息长度（字符数）
+- **不记录消息实际内容**（保护隐私）
+
+**操作相关**：
+- `operation` - 操作类型（create/send/interrupt/close）
+- `command` - 命令类型（new/cd/stop/status）
+
+#### 日志示例
+
+```typescript
+// 好的日志
+logger.info('[AgentManager] Creating agent', {
+  agentId,
+  cwd,
+  resumeSessionId,
+  operation: 'create'
+});
+
+logger.debug('[AgentManager] Sending message', {
+  agentId,
+  sessionId,
+  messageLength: text.length,
+  operation: 'send'
+});
+
+logger.error('[AgentManager] Failed to create agent', {
+  agentId,
+  cwd,
+  error: error.message,
+  stack: error.stack
+});
+
+// 不好的日志
+logger.info('Creating agent'); // 缺少上下文
+logger.debug('Message: ' + text); // 泄露消息内容
+logger.error('Error: ' + error); // 缺少结构化信息
+```
+
+#### 日志目标
+
+通过分析日志应该能够：
+1. 追踪一条消息的完整流程（从接收到响应）
+2. 调试 agent 创建失败的原因
+3. 分析并发问题和竞态条件
+4. 关联相关的操作（通过 chatId/agentId/sessionId）
+
+
 ## 贡献
 
 欢迎提交 Issue 和 Pull Request。
