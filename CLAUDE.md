@@ -1,6 +1,6 @@
 # 飞书机器人 - Claude Code 交互
 
-基于 TypeScript 和 Node.js 的飞书机器人，通过 WebSocket 长连接接收飞书消息，桥接 Claude Code CLI 实现 AI 对话交互。
+基于 TypeScript 和 Node.js 的飞书机器人，通过 WebSocket 长连接接收飞书消息，通过 stdin/stdout 管道与 Claude Code CLI 进程通信实现 AI 对话交互。
 
 ## 技术栈
 
@@ -8,7 +8,6 @@
 - **运行时**: Node.js 18+
 - **核心依赖**:
   - `@larksuiteoapi/node-sdk`: 飞书官方 SDK
-  - `ws`: 本地 WebSocket 服务器（桥接 Claude Code CLI）
   - `winston`: 结构化日志
   - `dotenv`: 环境变量管理
 
@@ -25,11 +24,11 @@ cc-feishu/
 │   │   └── websocket.ts        # 飞书 WebSocket 连接管理
 │   ├── claude/
 │   │   ├── types.ts            # Claude Code CLI NDJSON 协议类型
-│   │   ├── ws-server.ts        # 本地 WebSocket 服务器
-│   │   ├── bridge.ts           # CLI 消息桥接（协议解析、自动审批）
-│   │   ├── launcher.ts         # Claude Code CLI 进程管理
+│   │   ├── bridge.ts           # CLI 消息桥接（stdin/stdout 协议解析、自动审批）
+│   │   ├── launcher.ts         # Claude Code CLI 进程管理（stdio 模式）
 │   │   ├── session-manager.ts  # 会话管理（chat+cwd → session 映射）
-│   │   └── session-store.ts    # 会话持久化存储
+│   │   ├── session-store.ts    # 会话持久化存储
+│   │   └── session-scanner.ts  # 会话扫描和恢复
 │   ├── handlers/
 │   │   └── message.handler.ts  # 消息事件处理
 │   ├── services/
@@ -65,8 +64,8 @@ cp .env.example .env
 ```env
 FEISHU_APP_ID=cli_xxxxxxxxxx
 FEISHU_APP_SECRET=xxxxxxxxxxxxxx
-CLAUDE_WS_PORT=9800
 CLAUDE_WORK_ROOT=/path/to/your/projects
+CLAUDE_MODEL=claude-opus-4-6
 STREAMING_ENABLED=true
 STREAMING_THROTTLE_MS=150
 NODE_ENV=development
@@ -121,9 +120,10 @@ npm start
 ### 当前功能
 
 - ✅ 飞书 WebSocket 长连接（自动重连和心跳）
-- ✅ Claude Code CLI 集成（通过 `--sdk-url` WebSocket 协议）
+- ✅ Claude Code CLI 集成（通过 stdin/stdout 管道通信）
 - ✅ 每个飞书 chat 独立 Claude Code 会话
 - ✅ 工作目录切换（`/cd`），每个目录独立 session
+- ✅ 会话恢复（`--resume` 参数）
 - ✅ 工具权限自动批准
 - ✅ 长消息自动分段发送（飞书 4000 字符限制）
 - ✅ 消息去重（防止飞书重复投递）
@@ -136,8 +136,8 @@ npm start
 
 ```
 飞书用户发消息 → 飞书服务器 → (SDK WebSocket) → cc-feishu bot
-    → SessionManager → Claude Code CLI (--sdk-url)
-    → 本地 WebSocket Server → CLIBridge (NDJSON 协议)
+    → SessionManager → Claude Code CLI 进程 (stdin/stdout)
+    → CLIBridge (NDJSON 协议解析)
     → 流式卡片实时更新（Card Kit streaming）
     → CLI 返回 result → 关闭流式模式 → 最终卡片
 ```
@@ -172,25 +172,20 @@ npm start
 ### Claude Code CLI 桥接 (`src/claude/bridge.ts`)
 
 每个 session 一个 bridge 实例：
+- 通过 stdin/stdout 管道与 CLI 进程通信
 - 解析 NDJSON 协议消息（system/assistant/result/control_request）
 - 收集 assistant 消息中的文本内容
 - 收到 result 时合并文本通过回调通知上层
 - 自动批准工具权限请求
-- CLI 未连接时缓存消息队列
 
 ### Claude Code CLI 启动器 (`src/claude/launcher.ts`)
 
 管理 Claude Code CLI 子进程：
-- 使用 `--sdk-url` 参数连接本地 WebSocket 服务器
+- 使用 `--input-format stream-json` 和 `--output-format stream-json` 参数
+- 通过 stdin/stdout 管道进行 NDJSON 通信
+- 支持 `--resume` 参数恢复已有会话
 - 清除 `CLAUDECODE` 环境变量防止嵌套检测
 - 进程退出监控和清理
-
-### 本地 WebSocket 服务器 (`src/claude/ws-server.ts`)
-
-Claude Code CLI 连接的 WebSocket 端点：
-- 监听端口（默认 9800）
-- 路由 `/ws/cli/:sessionId` 连接
-- 将 CLI 消息路由到对应 session 的 bridge
 
 ### 消息处理器 (`src/handlers/message.handler.ts`)
 
@@ -223,8 +218,8 @@ Claude Code CLI 连接的 WebSocket 端点：
 - 加载环境变量
 - 验证必需配置
 - 提供类型安全的配置访问
-- Claude Code WebSocket 端口配置（`CLAUDE_WS_PORT`，默认 9800）
 - Claude Code 工作根目录配置（`CLAUDE_WORK_ROOT`，默认 `process.cwd()`）
+- Claude Code 模型配置（`CLAUDE_MODEL`，默认 `claude-opus-4-6`）
 - 流式输出开关（`STREAMING_ENABLED`，默认 true）
 - 流式更新节流间隔（`STREAMING_THROTTLE_MS`，默认 150ms）
 
@@ -331,12 +326,12 @@ const eventDispatcher = new lark.EventDispatcher({}).register({
 
 ## 技术架构
 
-### WebSocket 长连接优势
+### stdio 管道通信优势
 
-- **无需公网 IP**: 不需要配置回调 URL
-- **实时推送**: 事件即时到达，延迟低
-- **自动重连**: SDK 内置重连机制
-- **心跳保活**: 自动维持连接活跃
+- **简单可靠**: 标准的进程间通信方式
+- **无需额外端口**: 不需要管理 WebSocket 端口
+- **进程隔离**: 每个会话独立的 CLI 进程
+- **官方支持**: 与 Python SDK 实现方式一致
 
 ### 代码组织原则
 
@@ -347,9 +342,9 @@ const eventDispatcher = new lark.EventDispatcher({}).register({
 
 ## 核心协议文档
 
-### Claude Code WebSocket 协议
+### Claude Code stdio 协议
 
-本项目使用 Claude Code CLI 的 `--sdk-url` 参数建立 WebSocket 连接。完整的协议规范请参考：
+本项目使用 Claude Code CLI 的 `--input-format stream-json` 和 `--output-format stream-json` 参数通过 stdin/stdout 管道进行 NDJSON 通信。完整的协议规范请参考：
 
 📄 **[docs/WEBSOCKET_PROTOCOL_REVERSED.md](docs/WEBSOCKET_PROTOCOL_REVERSED.md)**
 
@@ -358,16 +353,36 @@ const eventDispatcher = new lark.EventDispatcher({}).register({
 - 控制协议（13 种子类型）
 - 权限审批流程（`can_use_tool`）
 - 会话管理和恢复
-- 重连和容错机制
 - 完整的 TypeScript 类型定义
 
 **关键要点**：
 - 协议基于 NDJSON（每行一个 JSON 对象）
-- CLI 作为 WebSocket 客户端连接到我们的服务器
+- 通过 stdin 发送消息，从 stdout 接收响应
 - 首条消息必须是 `user` 消息，CLI 响应 `system/init`
 - 工具权限通过 `control_request/can_use_tool` 请求
 - 响应必须包含 `updatedInput`（即使不修改）
 - 支持会话恢复（`--resume <session-id>`）
+
+### Python SDK 实现分析
+
+Anthropic 官方的 Python SDK 实现提供了重要的参考价值：
+
+📄 **[docs/PYTHON_SDK_ANALYSIS.md](docs/PYTHON_SDK_ANALYSIS.md)**
+
+该文档分析了：
+- **通信方式**：stdin/stdout 管道（而非 WebSocket）
+- **两种模式**：`query()` 单次查询 vs `ClaudeSDKClient` 持续对话
+- **控制协议**：与我们反向的协议完全一致
+- **进程管理**：优雅的启动、关闭和错误处理
+- **会话管理**：直接读取 `.jsonl` 文件，无需 CLI
+- **高级功能**：中断、动态权限切换、模型切换、文件回滚
+
+**关键发现**：
+- Python SDK 使用 `--input-format stream-json` 通过 stdin/stdout 通信
+- stdin/stdout 管道比 WebSocket 更简单可靠
+- 协议定义在代码中（TypedDict），无独立文档
+- 我们的协议文档比官方 SDK 更详细完整
+- 我们的实现已从 WebSocket 迁移到 stdio 模式，与官方 SDK 一致
 
 ## 许可证
 

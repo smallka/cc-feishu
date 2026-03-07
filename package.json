@@ -6,7 +6,12 @@
   "scripts": {
     "dev": "ts-node-dev --respawn --transpile-only src/index.ts",
     "build": "tsc",
-    "start": "node dist/index.js"
+    "start": "node dist/index.js",
+    "test:stdio": "ts-node tests/stdio-protocol.test.ts",
+    "test:multi-turn": "ts-node tests/multi-turn.test.ts",
+    "test:tool-use": "ts-node tests/tool-use.test.ts",
+    "test:tool-permission": "ts-node tests/tool-permission.test.ts",
+    "test:multi-session": "ts-node tests/multi-session.test.ts"
   },
   "keywords": [
     "feishu",

@@ -56,6 +56,16 @@ export interface CLIControlRequestMessage {
   };
 }
 
+export interface CLIControlResponseMessage {
+  type: 'control_response';
+  response: {
+    subtype: 'success' | 'error';
+    request_id: string;
+    response?: unknown;
+    error?: string;
+  };
+}
+
 export interface CLIStreamEventMessage {
   type: 'stream_event';
   event: unknown;
@@ -72,6 +82,7 @@ export type CLIMessage =
   | CLIAssistantMessage
   | CLIResultMessage
   | CLIControlRequestMessage
+  | CLIControlResponseMessage
   | CLIStreamEventMessage
   | CLIKeepAliveMessage
   | { type: 'system'; subtype: 'status'; [key: string]: unknown }

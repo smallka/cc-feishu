@@ -11,11 +11,10 @@ async function bootstrap() {
     logger.info('Starting Feishu bot application', {
       env: config.app.env,
       appId: config.feishu.appId,
-      claudeWsPort: config.claude.wsPort,
     });
 
-    // 启动 Claude Code WebSocket 服务器
-    sessionManager = new SessionManager(config.claude.wsPort);
+    // 启动 Claude Code Session Manager
+    sessionManager = new SessionManager();
     await sessionManager.start();
     setSessionManager(sessionManager);
 

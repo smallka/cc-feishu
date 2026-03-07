@@ -8,7 +8,6 @@ interface Config {
     appSecret: string;
   };
   claude: {
-    wsPort: number;
     workRoot: string;
     model: string; // 运行时可变
     messageTimeout: number;
@@ -38,7 +37,6 @@ const config: Config = {
     appSecret: process.env.FEISHU_APP_SECRET || '',
   },
   claude: {
-    wsPort: parseInt(process.env.CLAUDE_WS_PORT || '9800', 10),
     workRoot: process.env.CLAUDE_WORK_ROOT || process.cwd(),
     model: process.env.CLAUDE_MODEL || 'claude-opus-4-6',
     messageTimeout: parseInt(process.env.MESSAGE_TIMEOUT || '300000', 10),

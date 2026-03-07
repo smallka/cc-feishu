@@ -3,7 +3,6 @@ import logger from '../utils/logger';
 import config from '../config';
 
 export interface LaunchOptions {
-  wsPort: number;
   resume?: boolean;
   cwd?: string;
 }
@@ -17,20 +16,22 @@ export class CLILauncher {
     this.sessionId = sessionId;
   }
 
+  getProcess(): ChildProcess | null {
+    return this.process;
+  }
+
   onExit(cb: (code: number | null) => void): void {
     this.exitCallbacks.push(cb);
   }
 
   start(options: LaunchOptions): void {
-    const { wsPort, resume, cwd } = options;
-    const sdkUrl = `ws://localhost:${wsPort}/ws/cli/${this.sessionId}`;
+    const { resume, cwd } = options;
 
     const args = [
-      '--sdk-url', sdkUrl,
       '--print',
-      '--output-format', 'stream-json',
-      '--input-format', 'stream-json',
       '--verbose',
+      '--input-format', 'stream-json',
+      '--output-format', 'stream-json',
       '--model', config.claude.model,
     ];
 
@@ -42,7 +43,7 @@ export class CLILauncher {
 
     args.push('-p', '');
 
-    logger.info('Spawning Claude Code CLI', { sessionId: this.sessionId, resume: !!resume, sdkUrl });
+    logger.info('Spawning Claude Code CLI', { sessionId: this.sessionId, resume: !!resume, cwd });
 
     // 清除 CLAUDECODE 环境变量，避免嵌套会话检测
     const env = { ...process.env };
@@ -55,9 +56,8 @@ export class CLILauncher {
       shell: true,
     });
 
-    this.process.stdout?.on('data', (data: Buffer) => {
-      const text = data.toString().trim();
-      if (text) logger.debug('CLI stdout', { sessionId: this.sessionId, text });
+    this.process.stdout?.on('data', (_data: Buffer) => {
+      // stdout 现在用于 NDJSON 通信，不再记录日志
     });
 
     this.process.stderr?.on('data', (data: Buffer) => {

@@ -1,14 +1,16 @@
 import { randomUUID } from 'crypto';
-import { WebSocket } from 'ws';
+import { ChildProcess } from 'child_process';
+import * as readline from 'readline';
 import logger from '../utils/logger';
-import type { CLIMessage, CLIAssistantMessage, CLIControlRequestMessage } from './types';
+import type { CLIMessage, CLIAssistantMessage, CLIControlRequestMessage, CLIControlResponseMessage } from './types';
 
 export type OnResponseCallback = (text: string) => void;
 export type OnPartialTextCallback = (accumulatedText: string) => void;
 
 export class CLIBridge {
-  private ws: WebSocket | null = null;
-  private pendingMessages: string[] = [];
+  private process: ChildProcess | null = null;
+  private rl: readline.Interface | null = null;
+  private initRequestId: string | null = null;
   private collectedText: string[] = [];
   private onResponse: OnResponseCallback | null = null;
   private onPartialText: OnPartialTextCallback | null = null;
@@ -69,17 +71,50 @@ export class CLIBridge {
     this.onPartialText = cb;
   }
 
-  attachSocket(ws: WebSocket) {
-    this.ws = ws;
-    // 发送缓存的消息
-    for (const msg of this.pendingMessages) {
-      this.sendRaw(msg);
+  attachProcess(process: ChildProcess) {
+    this.process = process;
+
+    // 使用 readline 逐行解析 stdout
+    if (process.stdout) {
+      this.rl = readline.createInterface({
+        input: process.stdout,
+        crlfDelay: Infinity,
+      });
+
+      this.rl.on('line', (line: string) => {
+        this.handleCLIData(line);
+      });
     }
-    this.pendingMessages = [];
+
+    // 延迟 1 秒后发送初始化请求
+    setTimeout(() => {
+      this.sendInitialize();
+    }, 1000);
   }
 
-  detachSocket() {
-    this.ws = null;
+  detachProcess() {
+    if (this.rl) {
+      this.rl.close();
+      this.rl = null;
+    }
+    this.process = null;
+  }
+
+  private sendInitialize() {
+    this.initRequestId = randomUUID();
+    const initRequest = {
+      type: 'control_request',
+      request_id: this.initRequestId,
+      request: {
+        subtype: 'initialize',
+        hooks: null,
+      },
+    };
+    this.sendRaw(JSON.stringify(initRequest));
+    logger.info('[CLIBridge] Sent initialize request', {
+      sessionId: this.sessionId,
+      requestId: this.initRequestId,
+    });
   }
 
   sendUserMessage(text: string) {
@@ -94,16 +129,17 @@ export class CLIBridge {
   }
 
   handleCLIData(raw: string) {
-    const lines = raw.split('\n').filter(l => l.trim());
-    for (const line of lines) {
-      let msg: CLIMessage;
-      try {
-        msg = JSON.parse(line);
-      } catch {
-        continue;
-      }
-      this.routeMessage(msg);
+    // readline 已经按行分割，直接解析单行
+    const line = raw.trim();
+    if (!line) return;
+
+    let msg: CLIMessage;
+    try {
+      msg = JSON.parse(line);
+    } catch {
+      return;
     }
+    this.routeMessage(msg);
   }
 
   private routeMessage(msg: CLIMessage) {
@@ -111,8 +147,10 @@ export class CLIBridge {
     this.lastResponseTime = Date.now();
 
     switch (msg.type) {
-      case 'system':
-        if ('subtype' in msg && msg.subtype === 'init') {
+      case 'control_response':
+        // 处理初始化响应
+        const controlMsg = msg as CLIControlResponseMessage;
+        if (controlMsg.response?.request_id === this.initRequestId) {
           this.initialized = true;
           const waiters = this.initWaiters;
           this.initWaiters = [];
@@ -120,6 +158,12 @@ export class CLIBridge {
             clearTimeout(w.timer);
             w.resolve();
           }
+          logger.info('[CLIBridge] Initialized', { sessionId: this.sessionId });
+        }
+        break;
+
+      case 'system':
+        if ('subtype' in msg && msg.subtype === 'init') {
           logger.info('CLI session initialized', {
             sessionId: this.sessionId,
             model: msg.model,
@@ -188,10 +232,10 @@ export class CLIBridge {
   }
 
   /**
-   * 检查是否可以发送打断请求（WebSocket 是否连接）
+   * 检查是否可以发送打断请求（进程是否存活）
    */
   canInterrupt(): boolean {
-    return this.ws !== null && this.ws.readyState === WebSocket.OPEN;
+    return this.process !== null && !this.process.killed;
   }
 
   /**
@@ -199,10 +243,9 @@ export class CLIBridge {
    * @returns 是否成功发送
    */
   sendInterrupt(): boolean {
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
-      logger.warn('[CLIBridge] WebSocket 未连接，无法发送打断请求', {
+    if (!this.canInterrupt()) {
+      logger.warn('[CLIBridge] Process not running, cannot interrupt', {
         sessionId: this.sessionId,
-        wsState: this.ws?.readyState,
       });
       return false;
     }
@@ -213,18 +256,28 @@ export class CLIBridge {
       request: { subtype: 'interrupt' },
     };
 
-    this.ws.send(JSON.stringify(interruptRequest) + '\n');
-    logger.info('[CLIBridge] 已发送打断请求', {
+    this.sendRaw(JSON.stringify(interruptRequest));
+    logger.info('[CLIBridge] Sent interrupt request', {
       sessionId: this.sessionId,
     });
     return true;
   }
 
   private sendRaw(ndjson: string) {
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
-      this.pendingMessages.push(ndjson);
+    if (!this.process || this.process.killed) {
+      logger.warn('[CLIBridge] Process not available, cannot send', {
+        sessionId: this.sessionId,
+      });
       return;
     }
-    this.ws.send(ndjson + '\n');
+
+    if (!this.process.stdin) {
+      logger.error('[CLIBridge] Process stdin not available', {
+        sessionId: this.sessionId,
+      });
+      return;
+    }
+
+    this.process.stdin.write(ndjson + '\n');
   }
 }
