@@ -3,9 +3,8 @@ import logger from '../utils/logger';
 import { CLIBridge } from './bridge';
 import { CLILauncher } from './launcher';
 import {
-  getSessionId, setSessionId, removeSessionId,
-  getCurrentCwd, setCurrentCwd, getAllCwds,
-} from './session-store';
+  getLastCwd, getLastSessionId, setLastSession, clearLastSession,
+} from '../bot/chat-store';
 import { scanSessions, SessionSummary } from './session-scanner';
 import messageService from '../services/message.service';
 import { StreamingCard } from '../services/streaming-card';
@@ -35,7 +34,7 @@ export class SessionManager {
   }
 
   getCwd(chatId: string): string {
-    return getCurrentCwd(chatId) ?? this.defaultCwd;
+    return getLastCwd(chatId) ?? this.defaultCwd;
   }
 
   async sendMessage(chatId: string, text: string, onDone?: () => void): Promise<void> {
@@ -100,8 +99,8 @@ export class SessionManager {
       this.sessions.delete(chatId);
     }
 
-    // 更新持久化的当前目录
-    setCurrentCwd(chatId, newCwd, this.defaultCwd);
+    // 更新持久化
+    setLastSession(chatId, newCwd, randomUUID());
 
     // 立即启动新目录的 CLI
     this.getOrCreateSession(chatId, newCwd);
@@ -114,24 +113,23 @@ export class SessionManager {
       this.streamingCards.delete(chatId);
     }
 
-    const cwd = this.getCwd(chatId);
     const session = this.sessions.get(chatId);
     if (session) {
       await session.launcher.kill();
       session.bridge.detachProcess();
       this.sessions.delete(chatId);
-      removeSessionId(chatId, cwd);
-      logger.info('CLI session reset', { chatId, cwd, cliSessionId: session.sessionId });
+      clearLastSession(chatId);
+      logger.info('CLI session reset', { chatId, cwd: session.cwd, cliSessionId: session.sessionId });
     } else {
-      removeSessionId(chatId, cwd);
-      logger.info('CLI session reset (no active session)', { chatId, cwd });
+      clearLastSession(chatId);
+      logger.info('CLI session reset (no active session)', { chatId });
     }
   }
 
   getSessionInfo(chatId: string): string {
     const cwd = this.getCwd(chatId);
     const session = this.sessions.get(chatId);
-    const storedId = getSessionId(chatId, cwd);
+    const storedId = getLastSessionId(chatId);
     const cwdLine = `工作目录: ${cwd}`;
     if (!session && !storedId) return `${cwdLine}\n当前没有活跃的 Claude Code 会话`;
     if (!session) return `${cwdLine}\n会话 ID: ${storedId}\n状态: 未运行（可恢复）`;
@@ -140,13 +138,14 @@ export class SessionManager {
   }
 
   listCwds(chatId: string): string[] {
-    return getAllCwds(chatId);
+    const lastCwd = getLastCwd(chatId);
+    return lastCwd ? [lastCwd] : [];
   }
 
   listResumableSessions(chatId: string): SessionSummary[] {
     const cwd = this.getCwd(chatId);
     const currentSessionId = this.sessions.get(chatId)?.sessionId
-      ?? getSessionId(chatId, cwd);
+      ?? getLastSessionId(chatId);
     return scanSessions(cwd).filter(s => s.sessionId !== currentSessionId);
   }
 
@@ -178,7 +177,7 @@ export class SessionManager {
 
     const cwd = this.getCwd(chatId);
     // 更新 store 映射，使 getOrCreateSession 能以 resume 模式启动
-    setSessionId(chatId, cwd, cliSessionId, this.defaultCwd);
+    setLastSession(chatId, cwd, cliSessionId);
     const session = this.getOrCreateSession(chatId, cwd);
 
     try {
@@ -203,9 +202,12 @@ export class SessionManager {
       this.sessions.delete(chatId);
     }
 
-    const storedSessionId = getSessionId(chatId, cwd);
-    const sessionId = storedSessionId ?? randomUUID();
-    const resume = !!storedSessionId;
+    const storedSessionId = getLastSessionId(chatId);
+    const storedCwd = getLastCwd(chatId);
+    // 只有当 cwd 匹配时才 resume
+    const canResume = storedSessionId && storedCwd === cwd;
+    const sessionId = canResume ? storedSessionId : randomUUID();
+    const resume = !!canResume;
 
     const bridge = new CLIBridge(sessionId);
     const launcher = new CLILauncher(sessionId);
@@ -268,7 +270,7 @@ export class SessionManager {
         bridge.rejectInit('CLI exited before init');
         if (resume) {
           logger.warn('Resume failed, clearing stored CLI session', { chatId, cliSessionId: sessionId, cwd, code });
-          removeSessionId(chatId, cwd);
+          clearLastSession(chatId);
         } else {
           logger.error('CLI failed to start', { chatId, cliSessionId: sessionId, cwd, code });
         }
@@ -284,7 +286,7 @@ export class SessionManager {
     }
 
     if (!resume) {
-      setSessionId(chatId, cwd, sessionId, this.defaultCwd);
+      setLastSession(chatId, cwd, sessionId);
     }
 
     session = { chatId, sessionId, cwd, bridge, launcher };
