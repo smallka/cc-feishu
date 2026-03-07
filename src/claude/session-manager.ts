@@ -18,7 +18,6 @@ interface Session {
   cwd: string;
   bridge: CLIBridge;
   launcher: CLILauncher;
-  lastActiveTime: number;
 }
 
 export class SessionManager {
@@ -29,7 +28,6 @@ export class SessionManager {
   private wsPort: number;
   private defaultCwd: string;
   private healthCheckTimer: NodeJS.Timeout | null = null;
-  private idleCleanupTimer: NodeJS.Timeout | null = null;
 
   constructor(wsPort: number) {
     this.wsPort = wsPort;
@@ -61,7 +59,6 @@ export class SessionManager {
   async start(): Promise<void> {
     await this.wsServer.start();
     this.startHealthCheck();
-    this.startIdleCleanup();
   }
 
   getCwd(chatId: string): string {
@@ -71,7 +68,6 @@ export class SessionManager {
   async sendMessage(chatId: string, text: string, onDone?: () => void): Promise<void> {
     const cwd = this.getCwd(chatId);
     const session = this.getOrCreateSession(chatId, cwd);
-    session.lastActiveTime = Date.now(); // 更新活跃时间
     if (onDone) {
       this.pendingCallbacks.set(chatId, onDone);
     }
@@ -289,7 +285,7 @@ export class SessionManager {
       setSessionId(chatId, cwd, sessionId, this.defaultCwd);
     }
 
-    session = { chatId, sessionId, cwd, bridge, launcher, lastActiveTime: Date.now() };
+    session = { chatId, sessionId, cwd, bridge, launcher };
     this.sessions.set(chatId, session);
     logger.info(resume ? 'Resuming session' : 'New session created', { chatId, sessionId, cwd });
     return session;
@@ -396,65 +392,6 @@ export class SessionManager {
     });
   }
 
-  private startIdleCleanup(): void {
-    if (this.idleCleanupTimer) {
-      clearInterval(this.idleCleanupTimer);
-    }
-
-    const interval = config.claude.idleCleanupInterval;
-    this.idleCleanupTimer = setInterval(() => {
-      this.cleanupIdleSessions();
-    }, interval);
-
-    logger.debug('Idle session cleanup started', { interval });
-  }
-
-  private async cleanupIdleSessions(): Promise<void> {
-    const idleTimeout = config.claude.idleTimeout;
-    const now = Date.now();
-
-    for (const [chatId, session] of this.sessions.entries()) {
-      const idleTime = now - session.lastActiveTime;
-
-      if (idleTime > idleTimeout) {
-        logger.info('Cleaning up idle session', {
-          chatId,
-          sessionId: session.sessionId,
-          idleTime,
-          idleTimeout,
-        });
-
-        // 可选：发送通知
-        if (config.claude.notifyBeforeCleanup) {
-          await messageService.sendTextMessage(
-            chatId,
-            `💤 会话已空闲 ${Math.round(idleTime / 60000)} 分钟，自动清理。使用 /resume 可恢复历史会话。`
-          ).catch(err => {
-            logger.warn('Failed to send idle cleanup notification', { chatId, error: err });
-          });
-        }
-
-        // 关闭流式卡片
-        const card = this.streamingCards.get(chatId);
-        if (card) {
-          await card.close('(会话空闲已清理)').catch(() => {});
-          this.streamingCards.delete(chatId);
-        }
-
-        // 终止进程
-        await session.launcher.kill();
-
-        // 移除会话（保留 session-store 记录）
-        this.sessions.delete(chatId);
-
-        logger.info('Idle session cleaned up', {
-          chatId,
-          sessionId: session.sessionId,
-        });
-      }
-    }
-  }
-
   async closeStreamingCard(chatId: string): Promise<void> {
     const card = this.streamingCards.get(chatId);
     if (card) {
@@ -492,11 +429,6 @@ export class SessionManager {
     if (this.healthCheckTimer) {
       clearInterval(this.healthCheckTimer);
       this.healthCheckTimer = null;
-    }
-
-    if (this.idleCleanupTimer) {
-      clearInterval(this.idleCleanupTimer);
-      this.idleCleanupTimer = null;
     }
 
     for (const [, card] of this.streamingCards) {
