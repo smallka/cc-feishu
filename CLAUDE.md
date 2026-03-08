@@ -63,14 +63,22 @@ npm run dev
 ### 会话管理
 
 **ChatManager** (`src/bot/chat-manager.ts`)：
-- 维护 `Map<chatId, ChatData>` 存储会话信息（cwd, sessionId）
-- 维护 `Map<chatId, Agent>` 管理 Agent 实例
-- 每个 chat 同一时间只有一个 Agent（按 cwd 切换）
-- `/cd` 切换目录时：
-  1. 销毁当前 Agent
-  2. 更新 ChatData 的 cwd
-  3. 下次消息时创建新 Agent 并自动 resume 该目录的 sessionId
-- 首次响应时检测 session 变化并通知用户
+
+**数据结构**：
+- `chats: Map<chatId, ChatData>` - 存储会话元数据（cwd, sessionId, sessionNotified）
+- `agents: Map<chatId, Agent>` - 管理 Agent 进程实例
+
+**Chat 与 Agent 的关系**：
+- 一个 chat 对应一个 ChatData（持久化元数据）
+- 一个 chat 同一时间最多一个 Agent（进程实例）
+- Agent 可能不存在（未创建或已销毁），但 ChatData 可以保留
+
+**状态变化**：
+- **首次消息**：创建 Agent，在 defaultCwd 启动新会话
+- **后续消息**：复用存活的 Agent，或重启并 resume sessionId
+- **`/cd` 切换目录**：销毁 Agent，清空 sessionId，更新 cwd（下次消息创建新会话）
+- **`/new` 重置**：销毁 Agent，删除 ChatData（下次消息在当前 cwd 创建新会话）
+- **Agent 进程死亡**：下次消息时自动清理并重启
 
 **Agent** (`src/claude/agent.ts`)：
 - 封装单个 Claude Code CLI 进程
