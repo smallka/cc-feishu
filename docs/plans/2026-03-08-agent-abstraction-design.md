@@ -52,8 +52,8 @@ class Agent {
   // 中断当前任务
   interrupt(): boolean
 
-  // 销毁 Agent（杀掉进程）
-  async destroy(): Promise<void>
+  // 销毁 Agent（杀掉进程，可选传入 error）
+  async destroy(error?: Error): Promise<void>
 
   // 只读属性
   getAgentId(): string
@@ -74,12 +74,53 @@ class Agent {
 - `onResponseCallback` - 响应回调
 - `onErrorCallback` - 错误回调
 
-**错误处理**：
-通过 `onError` 回调上报以下错误：
-- CLI 进程启动失败
-- 初始化超时（15 秒）
-- CLI 进程意外退出
-- Resume 失败
+**异常处理机制**：
+
+参考 Node.js TCP Socket 的设计，统一通过 `destroy()` 方法处理所有关闭场景：
+
+1. **主动关闭**：`await agent.destroy()` - 不传 error 参数，不触发 onError 回调
+2. **异常关闭**：`await agent.destroy(error)` - 传入 error 参数，触发 onError 回调
+
+**异常场景处理**：
+
+- **CLI 进程意外退出**：
+  ```typescript
+  launcher.onExit((code) => {
+    if (this.destroyed) return;  // 已被主动销毁，忽略
+
+    const error = new Error(`CLI process exited unexpectedly with code ${code}`);
+    this.destroy(error);  // 统一通过 destroy 处理
+  });
+  ```
+
+- **初始化超时**：
+  ```typescript
+  async sendMessage(text: string): Promise<void> {
+    if (this.destroyed) {
+      logger.warn('[Agent] Cannot send message, agent destroyed');
+      return;  // 静默返回，不抛异常
+    }
+
+    try {
+      await this.bridge.waitForInit();
+    } catch (err) {
+      await this.destroy(err as Error);  // 初始化失败，销毁 Agent
+      throw err;
+    }
+
+    this.bridge.sendUserMessage(text);
+  }
+  ```
+
+- **destroyed 标记的作用**：
+  - 防止重复销毁
+  - 区分主动关闭和异常关闭
+  - `isAlive()` 返回 `!this.destroyed && this.launcher.isAlive()`
+
+**onError 回调的作用**：
+- 记录错误日志（关联 chatId）
+- 向用户发送错误消息
+- **不负责清理 agents Map**（由 `getOrCreateAgent()` 统一处理）
 
 ### SessionManager 简化
 
@@ -150,9 +191,10 @@ private getOrCreateAgent(chatId: string): Agent {
   });
 
   agent.onError((error) => {
+    // 只负责通知用户，不删除 agents Map
+    // getOrCreateAgent() 会在下次调用时检查 isAlive() 并清理
     logger.error('[SessionManager] Agent error', { chatId, error: error.message });
     messageService.sendTextMessage(chatId, `错误: ${error.message}`);
-    this.agents.delete(chatId);
   });
 
   // 7. 保存到 Map
@@ -169,9 +211,10 @@ private getOrCreateAgent(chatId: string): Agent {
 
 **生命周期管理**：
 - **chatId 第一次发消息**：创建 Agent
-- **/cd 切换目录**：销毁旧 Agent，更新 cwd，下次消息时创建新 Agent
-- **/new 重置会话**：销毁 Agent，清除持久化数据，下次消息时创建新 Agent
-- **CLI 进程退出**：触发 onError 回调，SessionManager 删除 Agent
+- **/cd 切换目录**：主动调用 `agent.destroy()`，更新 cwd，下次消息时创建新 Agent
+- **/new 重置会话**：主动调用 `agent.destroy()`，清除持久化数据，下次消息时创建新 Agent
+- **CLI 进程异常退出**：Agent 内部调用 `destroy(error)`，触发 onError 回调通知用户
+- **下次消息到达**：`getOrCreateAgent()` 检查 `isAlive()`，清理已死的 Agent，创建新 Agent
 
 ### message.handler.ts 调整
 
@@ -268,6 +311,45 @@ src/claude/
 3. **日志追踪**：通过 agentId 追踪完整生命周期
 4. **简化逻辑**：移除流式输出后代码量减少约 30%
 5. **易于扩展**：未来可以在 Agent 层面添加功能（如重试、超时控制等）
+6. **统一异常处理**：参考 TCP Socket 设计，所有关闭都通过 `destroy()` 统一处理
+7. **资源清理解耦**：onError 只负责通知，资源清理由 `getOrCreateAgent()` 统一处理
+
+## 异常处理设计总结
+
+### destroyed 标记的语义
+
+`destroyed = true` 表示 Agent 已不可用，进程已退出或正在退出。
+
+### 所有场景的处理
+
+1. **主动销毁**（用户调用 `/cd` 或 `/new`）
+   - SessionManager 调用 `agent.destroy()`
+   - `destroyed = true`（同步设置）
+   - 发送 SIGTERM，等待进程退出
+   - `launcher.onExit()` 触发，检查 `destroyed` 已为 true，不触发 onError
+
+2. **CLI 进程异常退出**（崩溃、OOM 等）
+   - `launcher.onExit()` 触发，检查 `destroyed` 为 false
+   - 调用 `destroy(error)` 传入错误
+   - 设置 `destroyed = true`
+   - 触发 onError 回调，通知用户
+
+3. **初始化超时**
+   - `sendMessage()` 中 `waitForInit()` 超时
+   - 调用 `destroy(error)` 传入错误
+   - 触发 onError 回调，通知用户
+
+4. **下次消息到达**
+   - `getOrCreateAgent()` 检查 `agent?.isAlive()`
+   - 如果 Agent 已死，清理并创建新 Agent
+   - 不依赖 onError 回调删除 Map
+
+### 关键设计原则
+
+- **统一入口**：所有关闭都通过 `destroy()` 方法
+- **error 参数**：区分主动关闭（无 error）和异常关闭（有 error）
+- **职责分离**：onError 只负责通知，清理由调用方处理
+- **防御性编程**：`sendMessage()` 检查 `destroyed` 但不抛异常，静默返回
 
 ## 实现步骤
 
@@ -281,9 +363,9 @@ src/claude/
 ## 风险和注意事项
 
 1. **初始化等待**：`sendMessage()` 会等待初始化完成，可能增加首次消息的延迟
-2. **错误处理**：需要确保所有错误都通过 `onError` 回调正确上报
-3. **资源清理**：需要确保 Agent 销毁时正确清理所有资源
-4. **并发安全**：需要确保 `getOrCreateAgent()` 的并发安全性
+2. **并发安全**：需要确保 `getOrCreateAgent()` 的并发安全性
+3. **资源清理时序**：确保 `destroy()` 中先设置 `destroyed = true`，再 kill 进程
+4. **onError 回调时机**：确保异常情况下 onError 在 destroy 内部被触发
 
 ## 后续扩展
 
