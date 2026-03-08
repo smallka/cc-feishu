@@ -157,7 +157,7 @@ export class Agent {
     await this.launcher.kill();
   }
 
-  getAgentId(): string {
+  getAgentId(): number {
     return this.agentId;
   }
 
