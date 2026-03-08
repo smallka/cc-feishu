@@ -23,14 +23,13 @@ export class SessionManager {
   private streamingCards = new Map<string, StreamingCard>(); // chatId -> active StreamingCard
   private pendingCallbacks = new Map<string, () => void>(); // chatId -> onDone callback
   private defaultCwd: string;
-  private healthCheckTimer: NodeJS.Timeout | null = null;
 
   constructor() {
     this.defaultCwd = config.claude.workRoot;
   }
 
   async start(): Promise<void> {
-    this.startHealthCheck();
+    // 启动完成
   }
 
   getCwd(chatId: string): string {
@@ -322,78 +321,6 @@ export class SessionManager {
   }
 
 
-  private startHealthCheck(): void {
-    if (this.healthCheckTimer) {
-      clearInterval(this.healthCheckTimer);
-    }
-
-    const interval = config.claude.healthCheckInterval;
-    this.healthCheckTimer = setInterval(() => {
-      this.checkCliHealth();
-    }, interval);
-
-    logger.debug('CLI health check started', { interval });
-  }
-
-  private checkCliHealth(): void {
-    const inactiveTimeout = config.claude.inactiveTimeout;
-    const now = Date.now();
-
-    for (const [chatId, session] of this.sessions.entries()) {
-      if (!session.bridge.isHealthy(inactiveTimeout)) {
-        const timeSinceLastResponse = now - session.bridge.getLastResponseTime();
-        logger.warn('CLI inactive detected', {
-          chatId,
-          cliSessionId: session.sessionId,
-          timeSinceLastResponse,
-          inactiveTimeout,
-        });
-
-        // 超过阈值，判定为僵死
-        if (timeSinceLastResponse > inactiveTimeout) {
-          logger.error('CLI process appears dead', {
-            chatId,
-            cliSessionId: session.sessionId,
-            timeSinceLastResponse,
-          });
-
-          // 清理僵死会话
-          this.cleanupDeadSession(chatId, session).catch(err => {
-            logger.error('Failed to cleanup dead session', { chatId, cliSessionId: session.sessionId, error: err });
-          });
-        }
-      }
-    }
-  }
-
-  private async cleanupDeadSession(chatId: string, session: Session): Promise<void> {
-    // 关闭流式卡片
-    const card = this.streamingCards.get(chatId);
-    if (card) {
-      await card.close('(CLI 进程无响应)').catch(() => {});
-      this.streamingCards.delete(chatId);
-    }
-
-    // 终止进程
-    await session.launcher.kill();
-
-    // 移除会话
-    this.sessions.delete(chatId);
-
-    // 发送通知
-    await messageService.sendTextMessage(
-      chatId,
-      '⚠️ CLI 进程无响应已自动清理，请使用 /new 重新开始会话。'
-    ).catch(err => {
-      logger.error('Failed to send dead session notification', { chatId, cliSessionId: session.sessionId, error: err });
-    });
-
-    logger.info('Dead CLI session cleaned up', {
-      chatId,
-      cliSessionId: session.sessionId,
-    });
-  }
-
   async closeStreamingCard(chatId: string): Promise<void> {
     const card = this.streamingCards.get(chatId);
     if (card) {
@@ -428,11 +355,6 @@ export class SessionManager {
   }
 
   async stop(): Promise<void> {
-    if (this.healthCheckTimer) {
-      clearInterval(this.healthCheckTimer);
-      this.healthCheckTimer = null;
-    }
-
     for (const [, card] of this.streamingCards) {
       await card.close('(服务关闭)').catch(() => {});
     }

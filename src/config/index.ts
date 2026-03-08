@@ -12,8 +12,6 @@ interface Config {
     model: string; // 运行时可变
     messageTimeout: number;
     messageTimeoutAction: 'notify' | 'kill';
-    healthCheckInterval: number;
-    inactiveTimeout: number;
   };
   streaming: {
     enabled: boolean;
@@ -41,8 +39,6 @@ const config: Config = {
     model: process.env.CLAUDE_MODEL || 'claude-opus-4-6',
     messageTimeout: parseInt(process.env.MESSAGE_TIMEOUT || '300000', 10),
     messageTimeoutAction: (process.env.MESSAGE_TIMEOUT_ACTION || 'notify') as 'notify' | 'kill',
-    healthCheckInterval: parseInt(process.env.CLI_HEALTH_CHECK_INTERVAL || '120000', 10),
-    inactiveTimeout: parseInt(process.env.CLI_INACTIVE_TIMEOUT || '300000', 10),
   },
   streaming: {
     enabled: process.env.STREAMING_ENABLED !== 'false',
