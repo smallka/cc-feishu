@@ -134,6 +134,8 @@ async function handleMessageInternal(data: MessageEvent, startTime: number): Pro
       '/stop — 打断任务',
       '/stat — 会话状态',
       '/cd [路径] — 切换目录',
+      '/approve <requestId> — 批准权限',
+      '/deny <requestId> — 拒绝权限',
       '/debug — 系统调试信息',
     ].join('\n');
     await messageService.sendTextMessage(chatId, helpText);
@@ -187,6 +189,36 @@ async function handleMessageInternal(data: MessageEvent, startTime: number): Pro
     }
     await chatManager.switchCwd(chatId, target);
     await messageService.sendTextMessage(chatId, `工作目录已切换到: ${target}`);
+    return;
+  }
+
+  if (text.startsWith('/approve ')) {
+    const requestId = text.slice(9).trim();
+    if (!requestId) {
+      await messageService.sendTextMessage(chatId, '用法: /approve <requestId>');
+      return;
+    }
+    const resolved = await chatManager.approvePermission(chatId, requestId);
+    if (resolved) {
+      await messageService.sendTextMessage(chatId, '✅ 已批准');
+    } else {
+      await messageService.sendTextMessage(chatId, '❌ 请求不存在或已过期');
+    }
+    return;
+  }
+
+  if (text.startsWith('/deny ')) {
+    const requestId = text.slice(6).trim();
+    if (!requestId) {
+      await messageService.sendTextMessage(chatId, '用法: /deny <requestId>');
+      return;
+    }
+    const resolved = await chatManager.denyPermission(chatId, requestId, '用户拒绝');
+    if (resolved) {
+      await messageService.sendTextMessage(chatId, '🚫 已拒绝');
+    } else {
+      await messageService.sendTextMessage(chatId, '❌ 请求不存在或已过期');
+    }
     return;
   }
 

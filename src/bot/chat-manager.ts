@@ -2,6 +2,7 @@ import logger from '../utils/logger';
 import messageService from '../services/message.service';
 import { Agent } from '../claude/agent';
 import config from '../config';
+import { PendingPermissions } from '../services/permission-gateway';
 
 interface ChatData {
   cwd: string;
@@ -15,6 +16,7 @@ export class ChatManager {
   private defaultCwd: string;
   private responseCompleteCallback: (() => void) | null = null;
   private startTime: number;
+  private pendingPermissions = new PendingPermissions();
 
   constructor() {
     this.defaultCwd = config.claude.workRoot;
@@ -32,6 +34,16 @@ export class ChatManager {
 
   async sendMessage(chatId: string, text: string): Promise<void> {
     const agent = this.getOrCreateAgent(chatId);
+
+    // 检查是否有待处理权限
+    if (agent.hasPendingPermission()) {
+      await messageService.sendTextMessage(
+        chatId,
+        '⚠️ 有待处理的权限请求，请先批准/拒绝，或使用 /new 重置会话'
+      );
+      return;
+    }
+
     logger.debug('[ChatManager] Sending message', {
       chatId,
       agentId: agent.getAgentId(),
@@ -76,8 +88,33 @@ export class ChatManager {
     }
     const cwd = this.chats.get(chatId)?.cwd ?? this.defaultCwd;
     this.chats.delete(chatId);
+    this.pendingPermissions.clear();
     logger.info('[ChatManager] Session reset', { chatId });
     return cwd;
+  }
+
+  async approvePermission(chatId: string, requestId: string): Promise<boolean> {
+    const agent = this.agents.get(chatId);
+    if (!agent) {
+      return false;
+    }
+    const resolved = this.pendingPermissions.resolve(requestId, { behavior: 'allow' });
+    if (resolved) {
+      agent.sendPermissionResponse(requestId, 'allow');
+    }
+    return resolved;
+  }
+
+  async denyPermission(chatId: string, requestId: string, reason?: string): Promise<boolean> {
+    const agent = this.agents.get(chatId);
+    if (!agent) {
+      return false;
+    }
+    const resolved = this.pendingPermissions.resolve(requestId, { behavior: 'deny', message: reason });
+    if (resolved) {
+      agent.sendPermissionResponse(requestId, 'deny', reason);
+    }
+    return resolved;
   }
 
   getSessionInfo(chatId: string): string {
@@ -221,6 +258,23 @@ export class ChatManager {
     agent.onError((error) => {
       logger.error('[ChatManager] Agent error', { chatId, error: error.message });
       messageService.sendTextMessage(chatId, `错误: ${error.message}`).catch(() => {});
+    });
+
+    agent.onPermissionRequest(async (request) => {
+      logger.info('[ChatManager] Permission request received', {
+        chatId,
+        requestId: request.requestId,
+        toolName: request.toolName,
+      });
+
+      // 发送权限请求消息
+      await messageService.sendPermissionRequest(chatId, request);
+
+      // 等待用户响应（带超时）
+      const result = await this.pendingPermissions.waitFor(request.requestId);
+
+      // 发送响应到 CLI
+      agent.sendPermissionResponse(request.requestId, result.behavior, result.message);
     });
 
     this.chats.set(chatId, { cwd, sessionId: agent.getSessionId() });

@@ -4,6 +4,11 @@ import { CLIBridge } from './bridge';
 
 export type OnResponseCallback = (text: string) => void;
 export type OnErrorCallback = (error: Error) => void;
+export type OnPermissionRequestCallback = (request: {
+  requestId: string;
+  toolName: string;
+  input: Record<string, any>;
+}) => void;
 
 let agentCounter = 0;
 
@@ -17,6 +22,7 @@ export class Agent {
   private destroyed = false;
   private onResponseCallback: OnResponseCallback | null = null;
   private onErrorCallback: OnErrorCallback | null = null;
+  private onPermissionRequestCallback: OnPermissionRequestCallback | null = null;
 
   constructor(chatId: string, cwd: string, resumeSessionId?: string) {
     this.agentId = `agent${++agentCounter}`;
@@ -45,6 +51,18 @@ export class Agent {
       });
       if (this.onResponseCallback) {
         this.onResponseCallback(text);
+      }
+    });
+
+    this.bridge.setOnPermissionRequest((request) => {
+      logger.info('[Agent] Permission request', {
+        chatId: this.chatId,
+        agentId: this.agentId,
+        requestId: request.requestId,
+        toolName: request.toolName,
+      });
+      if (this.onPermissionRequestCallback) {
+        this.onPermissionRequestCallback(request);
       }
     });
 
@@ -168,16 +186,28 @@ export class Agent {
     return this.bridge.getSessionId();
   }
 
-  isAlive(): boolean {
-    return !this.destroyed && this.launcher.isAlive();
-  }
-
-  onResponse(callback: OnResponseCallback): void {
+  onResponse(callback: OnResponseCallback) {
     this.onResponseCallback = callback;
   }
 
-  onError(callback: OnErrorCallback): void {
+  onError(callback: OnErrorCallback) {
     this.onErrorCallback = callback;
+  }
+
+  onPermissionRequest(callback: OnPermissionRequestCallback) {
+    this.onPermissionRequestCallback = callback;
+  }
+
+  hasPendingPermission(): boolean {
+    return this.bridge.hasPendingPermission();
+  }
+
+  sendPermissionResponse(requestId: string, behavior: 'allow' | 'deny', message?: string) {
+    this.bridge.sendPermissionResponse(requestId, behavior, message);
+  }
+
+  isAlive(): boolean {
+    return !this.destroyed && this.launcher.isAlive();
   }
 
   getStartTime(): number {

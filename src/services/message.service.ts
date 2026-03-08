@@ -1,6 +1,12 @@
 import feishuClient from '../bot/client';
 import logger from '../utils/logger';
 
+interface PermissionRequest {
+  requestId: string;
+  toolName: string;
+  input: Record<string, any>;
+}
+
 class MessageService {
   // 给消息添加 emoji 反应，返回 reactionId
   async addReaction(messageId: string, emojiType: string): Promise<string | null> {
@@ -83,6 +89,15 @@ class MessageService {
       logger.error('Failed to send card message', { error, chatId });
       throw error;
     }
+  }
+
+  // 发送权限请求消息
+  async sendPermissionRequest(chatId: string, request: PermissionRequest): Promise<void> {
+    const inputStr = JSON.stringify(request.input, null, 2);
+    const text = `🔐 **权限请求**\n\nClaude 想要执行：**${request.toolName}**\n\`\`\`json\n${inputStr}\n\`\`\`\n\n回复：\n\`/approve ${request.requestId}\` - 批准\n\`/deny ${request.requestId}\` - 拒绝`;
+
+    await this.sendTextMessage(chatId, text);
+    logger.info('Permission request sent', { chatId, requestId: request.requestId, toolName: request.toolName });
   }
 }
 

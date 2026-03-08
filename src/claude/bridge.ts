@@ -6,6 +6,11 @@ import type { CLIMessage, CLIAssistantMessage, CLIControlRequestMessage, CLICont
 
 export type OnResponseCallback = (text: string) => void;
 export type OnPartialTextCallback = (accumulatedText: string) => void;
+export type OnPermissionRequestCallback = (request: {
+  requestId: string;
+  toolName: string;
+  input: Record<string, any>;
+}) => void;
 
 export class CLIBridge {
   private process: ChildProcess | null = null;
@@ -15,10 +20,12 @@ export class CLIBridge {
   private onResponse: OnResponseCallback | null = null;
   private onPartialText: OnPartialTextCallback | null = null;
   private onComplete: (() => Promise<void>) | null = null;
+  private onPermissionRequest: OnPermissionRequestCallback | null = null;
   private initialized = false;
   private initWaiters: Array<{ resolve: () => void; reject: (err: Error) => void; timer: ReturnType<typeof setTimeout> }> = [];
   private sessionId?: string;
   private readonly agentId: string;
+  private pendingRequest: { requestId: string; msg: CLIControlRequestMessage } | null = null;
 
   constructor(agentId: string, sessionId?: string) {
     this.agentId = agentId;
@@ -65,6 +72,14 @@ export class CLIBridge {
 
   setOnPartialText(cb: OnPartialTextCallback) {
     this.onPartialText = cb;
+  }
+
+  setOnPermissionRequest(cb: OnPermissionRequestCallback) {
+    this.onPermissionRequest = cb;
+  }
+
+  hasPendingPermission(): boolean {
+    return this.pendingRequest !== null;
   }
 
   attachProcess(process: ChildProcess) {
@@ -239,23 +254,68 @@ export class CLIBridge {
       requestId: msg.request_id,
     });
 
-    // MVP: 自动批准所有工具请求
+    if (msg.request.subtype === 'can_use_tool') {
+      if (this.onPermissionRequest) {
+        // 保存请求，延迟响应
+        this.pendingRequest = { requestId: msg.request_id, msg };
+
+        // 触发回调（不等待）
+        this.onPermissionRequest({
+          requestId: msg.request_id,
+          toolName: msg.request.tool_name,
+          input: msg.request.input,
+        });
+
+        return; // 不发送响应
+      }
+
+      // 降级：自动批准
+      logger.info('[CLIBridge] Auto-approving tool', {
+        agentId: this.agentId,
+        tool: msg.request.tool_name,
+      });
+      this.sendPermissionResponse(msg.request_id, 'allow');
+    }
+  }
+
+  /**
+   * 发送权限响应
+   */
+  sendPermissionResponse(requestId: string, behavior: 'allow' | 'deny', message?: string) {
+    const pending = this.pendingRequest;
+    if (!pending || pending.requestId !== requestId) {
+      logger.warn('[CLIBridge] Unknown permission request', { requestId, agentId: this.agentId });
+      return;
+    }
+
+    // 检查进程是否存活
+    if (!this.process || this.process.killed) {
+      logger.warn('[CLIBridge] Process dead, cannot send response', { requestId, agentId: this.agentId });
+      this.pendingRequest = null;
+      return;
+    }
+
     const ndjson = JSON.stringify({
       type: 'control_response',
       response: {
         subtype: 'success',
-        request_id: msg.request_id,
+        request_id: requestId,
         response: {
-          behavior: 'allow',
-          updatedInput: msg.request.input,
+          behavior,
+          updatedInput: behavior === 'allow' ? pending.msg.request.input : undefined,
+          message,
         },
       },
     });
-    logger.info('[CLIBridge] Auto-approving tool', {
+
+    logger.info('[CLIBridge] Sending permission response', {
       agentId: this.agentId,
-      tool: msg.request.tool_name,
+      requestId,
+      behavior,
     });
+
     this.sendRaw(ndjson);
+    this.pendingRequest = null;
   }
 
   /**
