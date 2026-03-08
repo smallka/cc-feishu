@@ -129,12 +129,11 @@ async function handleMessageInternal(data: MessageEvent, startTime: number): Pro
   if (text === '/help') {
     const helpText = [
       '可用命令:',
-      '/help — 显示本帮助信息',
-      '/new — 重置当前会话，开始新对话',
-      '/stop — 打断 AI 当前任务（不销毁会话）',
-      '/status — 查看当前会话状态和工作目录',
-      '/cd — 切换到默认工作目录',
-      '/cd <路径> — 切换工作目录（绝对路径或相对路径）',
+      '/help — 显示帮助',
+      '/new — 重置会话',
+      '/stop — 打断任务',
+      '/stat — 会话状态',
+      '/cd [路径] — 切换目录',
     ].join('\n');
     await messageService.sendTextMessage(chatId, helpText);
     return;
@@ -158,7 +157,7 @@ async function handleMessageInternal(data: MessageEvent, startTime: number): Pro
     return;
   }
 
-  if (text === '/status') {
+  if (text === '/stat') {
     const info = chatManager.getSessionInfo(chatId);
     await messageService.sendTextMessage(chatId, info);
     return;
