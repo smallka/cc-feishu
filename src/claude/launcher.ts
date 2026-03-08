@@ -27,7 +27,7 @@ export class CLILauncher {
       '--input-format', 'stream-json',
       '--output-format', 'stream-json',
       '--model', config.claude.model,
-      '--permission-mode', 'bypassPermissions',
+      '--permission-prompt-tool', 'stdio',
     ];
 
     if (resumeSessionId) {
