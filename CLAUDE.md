@@ -311,7 +311,6 @@ const eventDispatcher = new lark.EventDispatcher({}).register({
 
 - 支持更多消息类型（图片、文件、富文本）
 - 流式输出完成后追加评价按钮（卡片交互回调）
-- 会话超时自动清理
 - 添加消息模板
 
 ### 中期扩展
