@@ -5,16 +5,21 @@ import { Agent } from './agent';
 
 export class SessionManager {
   private agents = new Map<string, Agent>();
+  private responseCompleteCallback: (() => void) | null = null;
 
   async start(): Promise<void> {
     logger.info('[SessionManager] Started');
+  }
+
+  onResponseComplete(callback: () => void): void {
+    this.responseCompleteCallback = callback;
   }
 
   getCwd(chatId: string): string {
     return chatManager.getCwd(chatId);
   }
 
-  async sendMessage(chatId: string, text: string, onComplete?: () => Promise<void>): Promise<void> {
+  async sendMessage(chatId: string, text: string): Promise<void> {
     const agent = this.getOrCreateAgent(chatId);
     logger.debug('[SessionManager] Sending message', {
       chatId,
@@ -22,7 +27,7 @@ export class SessionManager {
       sessionId: agent.getSessionId(),
       messageLength: text.length
     });
-    await agent.sendMessage(text, onComplete);
+    await agent.sendMessage(text);
   }
 
   interruptSession(chatId: string): 'success' | 'no_session' | 'not_running' {
@@ -111,6 +116,9 @@ export class SessionManager {
         textLength: text.length
       });
       this.sendPlainText(chatId, text);
+      if (this.responseCompleteCallback) {
+        this.responseCompleteCallback();
+      }
     });
 
     agent.onError((error) => {
@@ -128,7 +136,7 @@ export class SessionManager {
   private sendPlainText(chatId: string, text: string): void {
     const MAX_LEN = 4000;
     if (text.length <= MAX_LEN) {
-      messageService.sendTextMessage(chatId, text).then(() => {
+      messageService.sendCardMessage(chatId, text).then(() => {
         logger.debug('[SessionManager] Response sent', { chatId, textLength: text.length });
       }).catch(err => {
         logger.error('[SessionManager] Failed to send response', { chatId, error: err.message });

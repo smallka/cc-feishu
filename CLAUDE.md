@@ -21,22 +21,18 @@ cc-feishu/
 │   │   └── index.ts            # 配置管理
 │   ├── bot/
 │   │   ├── client.ts           # 飞书客户端
-│   │   └── websocket.ts        # 飞书 WebSocket 连接管理
-│   ├── bot/
-│   │   ├── client.ts           # 飞书客户端
 │   │   ├── websocket.ts        # 飞书 WebSocket 连接管理
-│   │   └── chat-store.ts       # Chat 会话信息内存存储
+│   │   └── chat-manager.ts     # Chat 会话信息内存存储
 │   ├── claude/
 │   │   ├── types.ts            # Claude Code CLI NDJSON 协议类型
 │   │   ├── bridge.ts           # CLI 消息桥接（stdin/stdout 协议解析、自动审批）
 │   │   ├── launcher.ts         # Claude Code CLI 进程管理（stdio 模式）
-│   │   ├── session-manager.ts  # 会话管理（chat+cwd → session 映射）
-│   │   └── session-scanner.ts  # 会话扫描和恢复
+│   │   ├── agent.ts            # Agent 封装（单个 CLI 进程）
+│   │   └── session-manager.ts  # 会话管理（chat+cwd → agent 映射）
 │   ├── handlers/
 │   │   └── message.handler.ts  # 消息事件处理
 │   ├── services/
-│   │   ├── message.service.ts  # 消息发送服务
-│   │   └── streaming-card.ts   # 流式卡片（Card Kit streaming）
+│   │   └── message.service.ts  # 消息发送服务（支持 Card 格式）
 │   └── utils/
 │       └── logger.ts           # 日志工具
 ├── .env                         # 环境变量（需自行创建）
@@ -69,8 +65,6 @@ FEISHU_APP_ID=cli_xxxxxxxxxx
 FEISHU_APP_SECRET=xxxxxxxxxxxxxx
 CLAUDE_WORK_ROOT=/path/to/your/projects
 CLAUDE_MODEL=claude-opus-4-6
-STREAMING_ENABLED=true
-STREAMING_THROTTLE_MS=150
 NODE_ENV=development
 LOG_LEVEL=info
 ```
@@ -91,7 +85,6 @@ LOG_LEVEL=info
 3. **配置权限**
    - 添加 `im:message` 权限（接收消息）
    - 添加 `im:message:send_as_bot` 权限（发送消息）
-   - 添加 `cardkit:card:write` 权限（创建与更新卡片，流式输出需要）
 
 4. **发布应用**
    - 发布应用并在企业内可用
@@ -130,7 +123,7 @@ npm start
 - ✅ 工具权限自动批准
 - ✅ 长消息自动分段发送（飞书 4000 字符限制）
 - ✅ 消息去重（防止飞书重复投递）
-- ✅ 流式输出（Card Kit streaming，打字机效果实时显示）
+- ✅ Card 消息格式（支持 Markdown 格式化显示）
 - ✅ 命令支持（`/help`、`/new`、`/status`、`/cd`）
 - ✅ 结构化日志记录
 - ✅ 优雅关闭（Ctrl+C）
@@ -141,8 +134,8 @@ npm start
 飞书用户发消息 → 飞书服务器 → (SDK WebSocket) → cc-feishu bot
     → SessionManager → Claude Code CLI 进程 (stdin/stdout)
     → CLIBridge (NDJSON 协议解析)
-    → 流式卡片实时更新（Card Kit streaming）
-    → CLI 返回 result → 关闭流式模式 → 最终卡片
+    → Card 消息（Markdown 格式）
+    → CLI 返回 result → 发送最终消息
 ```
 
 ### 命令

@@ -51,6 +51,39 @@ class MessageService {
       throw error;
     }
   }
+
+  // 发送 Markdown 卡片消息
+  async sendCardMessage(chatId: string, markdown: string): Promise<void> {
+    try {
+      const client = feishuClient.getClient();
+
+      await client.im.message.create({
+        params: {
+          receive_id_type: 'chat_id',
+        },
+        data: {
+          receive_id: chatId,
+          msg_type: 'interactive',
+          content: JSON.stringify({
+            config: {
+              wide_screen_mode: true,
+            },
+            elements: [
+              {
+                tag: 'markdown',
+                content: markdown,
+              },
+            ],
+          }),
+        },
+      });
+
+      logger.info('Card message sent', { chatId, contentLength: markdown.length });
+    } catch (error) {
+      logger.error('Failed to send card message', { error, chatId });
+      throw error;
+    }
+  }
 }
 
 export default new MessageService();

@@ -11,8 +11,19 @@ let sessionManager: SessionManager | null = null;
 const processedMessages = new Set<string>();
 const MAX_CACHE_SIZE = 500;
 
+// 表情队列：按顺序存储待移除的表情
+const reactionQueue: Array<{ messageId: string; reactionId: string }> = [];
+
 export function setSessionManager(sm: SessionManager) {
   sessionManager = sm;
+
+  // 注册响应完成回调，按顺序移除表情
+  sm.onResponseComplete(() => {
+    const reaction = reactionQueue.shift();
+    if (reaction) {
+      messageService.removeReaction(reaction.messageId, reaction.reactionId).catch(() => {});
+    }
+  });
 }
 
 interface MessageEvent {
@@ -205,11 +216,11 @@ async function handleMessageInternal(data: MessageEvent, startTime: number): Pro
 
   // 转发给 Claude Code
   const reactionId = await messageService.addReaction(message.message_id, 'Typing');
-  await sessionManager.sendMessage(chatId, text, async () => {
-    if (reactionId) {
-      await messageService.removeReaction(message.message_id, reactionId);
-    }
-  });
+  if (reactionId) {
+    reactionQueue.push({ messageId: message.message_id, reactionId });
+  }
+
+  await sessionManager.sendMessage(chatId, text);
 
   // 记录处理时长
   const duration = Date.now() - startTime;

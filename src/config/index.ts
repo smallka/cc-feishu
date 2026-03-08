@@ -13,10 +13,6 @@ interface Config {
     messageTimeout: number;
     messageTimeoutAction: 'notify' | 'kill';
   };
-  streaming: {
-    enabled: boolean;
-    throttleMs: number;
-  };
   app: {
     env: string;
     logLevel: string;
@@ -39,10 +35,6 @@ const config: Config = {
     model: process.env.CLAUDE_MODEL || 'claude-opus-4-6',
     messageTimeout: parseInt(process.env.MESSAGE_TIMEOUT || '300000', 10),
     messageTimeoutAction: (process.env.MESSAGE_TIMEOUT_ACTION || 'notify') as 'notify' | 'kill',
-  },
-  streaming: {
-    enabled: process.env.STREAMING_ENABLED !== 'false',
-    throttleMs: parseInt(process.env.STREAMING_THROTTLE_MS || '150', 10),
   },
   app: {
     env: process.env.NODE_ENV || 'development',
