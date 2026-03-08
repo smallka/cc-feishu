@@ -43,7 +43,7 @@ export class CLILauncher {
 
     args.push('-p', '');
 
-    logger.info('Spawning Claude Code CLI', { sessionId: this.sessionId, resume: !!resume, cwd });
+    logger.info('[CLILauncher] Spawning Claude Code CLI', { sessionId: this.sessionId, resume: !!resume, cwd });
 
     // 清除 CLAUDECODE 环境变量，避免嵌套会话检测
     const env = { ...process.env };
@@ -62,24 +62,24 @@ export class CLILauncher {
 
     this.process.stderr?.on('data', (data: Buffer) => {
       const text = data.toString().trim();
-      if (text) logger.debug('CLI stderr', { sessionId: this.sessionId, text });
+      if (text) logger.debug('[CLILauncher] CLI stderr', { sessionId: this.sessionId, text });
     });
 
     this.process.on('exit', (code) => {
-      logger.info('CLI process exited', { sessionId: this.sessionId, code });
+      logger.info('[CLILauncher] CLI process exited', { sessionId: this.sessionId, code });
       this.process = null;
       // 触发所有退出回调
       for (const cb of this.exitCallbacks) {
         try {
           cb(code);
         } catch (err) {
-          logger.error('Error in exit callback', { sessionId: this.sessionId, error: err });
+          logger.error('[CLILauncher] Error in exit callback', { sessionId: this.sessionId, error: err });
         }
       }
     });
 
     this.process.on('error', (err) => {
-      logger.error('CLI process error', { sessionId: this.sessionId, error: err.message });
+      logger.error('[CLILauncher] CLI process error', { sessionId: this.sessionId, error: err.message });
     });
   }
 

@@ -92,7 +92,7 @@ function parseSessionFile(filePath: string): SessionSummary | null {
 export function scanSessions(cwd: string, limit = 5): SessionSummary[] {
   const projectDir = findProjectDir(cwd);
   if (!projectDir) {
-    logger.debug('No project dir found for cwd', { cwd });
+    logger.debug('[SessionScanner] No project dir found for cwd', { cwd });
     return [];
   }
 
@@ -114,7 +114,7 @@ export function scanSessions(cwd: string, limit = 5): SessionSummary[] {
     }
     return sessions;
   } catch (err: any) {
-    logger.error('Failed to scan sessions', { cwd, error: err.message });
+    logger.error('[SessionScanner] Failed to scan sessions', { cwd, error: err.message });
     return [];
   }
 }

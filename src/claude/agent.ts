@@ -26,6 +26,7 @@ export class Agent {
       sessionId: this.sessionId,
       cwd,
       isResume: !!resumeSessionId,
+      operation: 'create'
     });
 
     // 创建 launcher 和 bridge
@@ -87,6 +88,7 @@ export class Agent {
       agentId: this.agentId,
       sessionId: this.sessionId,
       messageLength: text.length,
+      operation: 'send'
     });
 
     try {
@@ -111,6 +113,7 @@ export class Agent {
     logger.info('[Agent] Interrupting', {
       agentId: this.agentId,
       sessionId: this.sessionId,
+      operation: 'interrupt'
     });
 
     return this.bridge.sendInterrupt();
