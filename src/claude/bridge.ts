@@ -17,9 +17,11 @@ export class CLIBridge {
   private onComplete: (() => Promise<void>) | null = null;
   private initialized = false;
   private initWaiters: Array<{ resolve: () => void; reject: (err: Error) => void; timer: ReturnType<typeof setTimeout> }> = [];
-  private sessionId: string;
+  private sessionId?: string;
+  private readonly agentId: string;
 
-  constructor(sessionId: string) {
+  constructor(agentId: string, sessionId?: string) {
+    this.agentId = agentId;
     this.sessionId = sessionId;
   }
 
@@ -27,7 +29,7 @@ export class CLIBridge {
     return this.initialized;
   }
 
-  getSessionId(): string {
+  getSessionId(): string | undefined {
     return this.sessionId;
   }
 
@@ -106,7 +108,7 @@ export class CLIBridge {
     };
     this.sendRaw(JSON.stringify(initRequest));
     logger.info('[CLIBridge] Sent initialize request', {
-      sessionId: this.sessionId,
+      agentId: this.agentId,
       requestId: this.initRequestId,
     });
   }
@@ -116,7 +118,7 @@ export class CLIBridge {
       type: 'user',
       message: { role: 'user', content: text },
       parent_tool_use_id: null,
-      session_id: this.sessionId,
+      session_id: this.sessionId || null,
     });
     this.collectedText = [];
     this.onComplete = onComplete || null;
@@ -139,7 +141,7 @@ export class CLIBridge {
 
   private routeMessage(msg: CLIMessage) {
     logger.debug('[CLIBridge] Received message', {
-      sessionId: this.sessionId,
+      agentId: this.agentId,
       messageType: msg.type,
     });
 
@@ -155,7 +157,7 @@ export class CLIBridge {
             clearTimeout(w.timer);
             w.resolve();
           }
-          logger.info('[CLIBridge] Initialized', { sessionId: this.sessionId });
+          logger.info('[CLIBridge] Initialized', { agentId: this.agentId });
         }
         break;
 
@@ -167,6 +169,7 @@ export class CLIBridge {
 
           if (sessionChanged) {
             logger.info('[CLIBridge] Session ID updated', {
+              agentId: this.agentId,
               oldSessionId: this.sessionId,
               newSessionId: actualSessionId,
             });
@@ -174,6 +177,7 @@ export class CLIBridge {
           }
 
           logger.info('[CLIBridge] CLI session initialized', {
+            agentId: this.agentId,
             sessionId: this.sessionId,
             sessionChanged,
             model: initMsg.model,
@@ -229,7 +233,7 @@ export class CLIBridge {
 
   private handleControlRequest(msg: CLIControlRequestMessage) {
     logger.info('[CLIBridge] Received control_request', {
-      sessionId: this.sessionId,
+      agentId: this.agentId,
       subtype: msg.request?.subtype,
       toolName: msg.request?.tool_name,
       requestId: msg.request_id,
@@ -248,8 +252,8 @@ export class CLIBridge {
       },
     });
     logger.info('[CLIBridge] Auto-approving tool', {
+      agentId: this.agentId,
       tool: msg.request.tool_name,
-      sessionId: this.sessionId,
     });
     this.sendRaw(ndjson);
   }
@@ -268,7 +272,7 @@ export class CLIBridge {
   sendInterrupt(): boolean {
     if (!this.canInterrupt()) {
       logger.warn('[CLIBridge] Process not running, cannot interrupt', {
-        sessionId: this.sessionId,
+        agentId: this.agentId,
       });
       return false;
     }
@@ -281,7 +285,7 @@ export class CLIBridge {
 
     this.sendRaw(JSON.stringify(interruptRequest));
     logger.info('[CLIBridge] Sent interrupt request', {
-      sessionId: this.sessionId,
+      agentId: this.agentId,
     });
     return true;
   }
@@ -289,14 +293,14 @@ export class CLIBridge {
   private sendRaw(ndjson: string) {
     if (!this.process || this.process.killed) {
       logger.warn('[CLIBridge] Process not available, cannot send', {
-        sessionId: this.sessionId,
+        agentId: this.agentId,
       });
       return;
     }
 
     if (!this.process.stdin) {
       logger.error('[CLIBridge] Process stdin not available', {
-        sessionId: this.sessionId,
+        agentId: this.agentId,
       });
       return;
     }

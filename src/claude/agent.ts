@@ -1,4 +1,3 @@
-import { randomUUID } from 'crypto';
 import logger from '../utils/logger';
 import { CLILauncher } from './launcher';
 import { CLIBridge } from './bridge';
@@ -9,7 +8,7 @@ export type OnErrorCallback = (error: Error) => void;
 let agentCounter = 0;
 
 export class Agent {
-  private readonly agentId: number;
+  private readonly agentId: string;
   private readonly chatId: string;
   private readonly cwd: string;
   private readonly launcher: CLILauncher;
@@ -19,22 +18,21 @@ export class Agent {
   private onErrorCallback: OnErrorCallback | null = null;
 
   constructor(chatId: string, cwd: string, resumeSessionId?: string) {
-    this.agentId = ++agentCounter;
+    this.agentId = `agent${++agentCounter}`;
     this.chatId = chatId;
     this.cwd = cwd;
-    const sessionId = resumeSessionId || randomUUID();
 
     logger.info('[Agent] Creating agent', {
       chatId,
       agentId: this.agentId,
-      sessionId,
+      sessionId: resumeSessionId,
       cwd,
       isResume: !!resumeSessionId,
     });
 
     // 创建 launcher 和 bridge
-    this.launcher = new CLILauncher(sessionId);
-    this.bridge = new CLIBridge(sessionId);
+    this.launcher = new CLILauncher(this.agentId);
+    this.bridge = new CLIBridge(this.agentId, resumeSessionId);
 
     // 设置 bridge 回调
     this.bridge.setOnResponse((text) => {
@@ -66,7 +64,7 @@ export class Agent {
     });
 
     // 启动 CLI 进程
-    this.launcher.start({ cwd, resume: !!resumeSessionId });
+    this.launcher.start(cwd, resumeSessionId);
 
     // 连接 bridge
     const process = this.launcher.getProcess();
@@ -156,7 +154,7 @@ export class Agent {
     await this.launcher.kill();
   }
 
-  getAgentId(): number {
+  getAgentId(): string {
     return this.agentId;
   }
 
@@ -164,7 +162,7 @@ export class Agent {
     return this.cwd;
   }
 
-  getSessionId(): string {
+  getSessionId(): string | undefined {
     return this.bridge.getSessionId();
   }
 
