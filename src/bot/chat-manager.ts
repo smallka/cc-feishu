@@ -6,12 +6,11 @@ import config from '../config';
 interface ChatData {
   cwd: string;
   sessionId: string | undefined;
-  expectedSessionId?: string;
   sessionNotified?: boolean;
 }
 
 export class ChatManager {
-  private store: Map<string, ChatData> = new Map();
+  private chats: Map<string, ChatData> = new Map();
   private agents = new Map<string, Agent>();
   private defaultCwd: string;
   private responseCompleteCallback: (() => void) | null = null;
@@ -52,7 +51,7 @@ export class ChatManager {
   }
 
   async switchCwd(chatId: string, newCwd: string): Promise<void> {
-    const data = this.store.get(chatId);
+    const data = this.chats.get(chatId);
     const currentCwd = data?.cwd ?? this.defaultCwd;
     if (currentCwd === newCwd) {
       logger.debug('[ChatManager] Cwd unchanged, skipping switch', { chatId, cwd: newCwd });
@@ -63,7 +62,7 @@ export class ChatManager {
       await agent.destroy();
       this.agents.delete(chatId);
     }
-    this.store.set(chatId, { cwd: newCwd, sessionId: undefined });
+    this.chats.set(chatId, { cwd: newCwd, sessionId: undefined });
     logger.info('[ChatManager] Switched cwd', { chatId, oldCwd: currentCwd, newCwd });
   }
 
@@ -73,14 +72,14 @@ export class ChatManager {
       await agent.destroy();
       this.agents.delete(chatId);
     }
-    const cwd = this.store.get(chatId)?.cwd ?? this.defaultCwd;
-    this.store.delete(chatId);
+    const cwd = this.chats.get(chatId)?.cwd ?? this.defaultCwd;
+    this.chats.delete(chatId);
     logger.info('[ChatManager] Session reset', { chatId });
     return cwd;
   }
 
   getSessionInfo(chatId: string): string {
-    const data = this.store.get(chatId);
+    const data = this.chats.get(chatId);
     const cwd = data?.cwd ?? this.defaultCwd;
     const agent = this.agents.get(chatId);
     const storedId = data?.sessionId;
@@ -112,7 +111,7 @@ export class ChatManager {
       this.agents.delete(chatId);
     }
 
-    const data = this.store.get(chatId);
+    const data = this.chats.get(chatId);
     const cwd = data?.cwd ?? this.defaultCwd;
     const storedSessionId = data?.sessionId;
     const resumeSessionId = (storedSessionId && data?.cwd === cwd) ? storedSessionId : undefined;
@@ -130,7 +129,7 @@ export class ChatManager {
     const expectedSessionId = agent.getSessionId();
 
     agent.onResponse((text) => {
-      const data = this.store.get(chatId);
+      const data = this.chats.get(chatId);
 
       // 第一次响应时检查 session 是否变化
       if (data && !data.sessionNotified) {
@@ -152,7 +151,7 @@ export class ChatManager {
         }
 
         // 标记已通知，更新实际 sessionId
-        this.store.set(chatId, { ...data, sessionNotified: true, sessionId: actualSessionId });
+        this.chats.set(chatId, { ...data, sessionNotified: true, sessionId: actualSessionId });
       }
 
       logger.debug('[ChatManager] Agent response received', {
@@ -171,7 +170,7 @@ export class ChatManager {
       messageService.sendTextMessage(chatId, `错误: ${error.message}`).catch(() => {});
     });
 
-    this.store.set(chatId, { cwd, sessionId: agent.getSessionId() });
+    this.chats.set(chatId, { cwd, sessionId: agent.getSessionId() });
 
     return agent;
   }
