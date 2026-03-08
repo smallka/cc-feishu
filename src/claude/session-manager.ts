@@ -1,18 +1,13 @@
-import { randomUUID } from 'crypto';
 import logger from '../utils/logger';
 import { chatManager } from '../bot/chat-manager';
 import messageService from '../services/message.service';
 import { Agent } from './agent';
 
 export class SessionManager {
-  private agents = new Map<string, Agent>(); // chatId -> Agent
-
-  constructor() {
-    // 不再需要 defaultCwd，由 chatManager 管理
-  }
+  private agents = new Map<string, Agent>();
 
   async start(): Promise<void> {
-    // 启动完成
+    logger.info('[SessionManager] Started');
   }
 
   getCwd(chatId: string): string {
@@ -24,250 +19,86 @@ export class SessionManager {
     await agent.sendMessage(text);
   }
 
-  /**
-   * 打断指定会话的当前任务
-   * @returns 'success' | 'no_session' | 'not_running'
-   */
   interruptSession(chatId: string): 'success' | 'no_session' | 'not_running' {
     const agent = this.agents.get(chatId);
     if (!agent) {
-      logger.warn('[SessionManager] Agent not found, cannot interrupt', { chatId });
       return 'no_session';
     }
-
-    const success = agent.interrupt();
-    if (success) {
-      logger.info('[SessionManager] Session interrupted', {
-        chatId,
-        agentId: agent.getAgentId(),
-        sessionId: agent.getSessionId(),
-        cwd: agent.getCwd(),
-      });
-      return 'success';
-    }
-
-    return 'not_running';
+    return agent.interrupt() ? 'success' : 'not_running';
   }
 
   async switchCwd(chatId: string, newCwd: string): Promise<void> {
-    const card = this.streamingCards.get(chatId);
-    if (card) {
-      await card.close('(已切换工作目录)').catch(() => {});
-      this.streamingCards.delete(chatId);
+    const agent = this.agents.get(chatId);
+    if (agent) {
+      await agent.destroy();
+      this.agents.delete(chatId);
     }
-
-    // 杀掉当前活跃的 CLI
-    const current = this.sessions.get(chatId);
-    if (current) {
-      logger.info('Switching cwd, killing current CLI session', {
-        chatId,
-        cliSessionId: current.sessionId,
-        oldCwd: current.cwd,
-        newCwd,
-      });
-      await current.launcher.kill();
-      current.bridge.detachProcess();
-      this.sessions.delete(chatId);
-    }
-
-    // 更新持久化
-    chatManager.setSession(chatId, newCwd, randomUUID());
-
-    // 立即启动新目录的 CLI
-    this.getOrCreateSession(chatId, newCwd);
+    chatManager.clearSession(chatId);
+    chatManager.setSession(chatId, newCwd, '');
+    logger.info('[SessionManager] Switched cwd', { chatId, newCwd });
   }
 
   async resetSession(chatId: string): Promise<void> {
-    const card = this.streamingCards.get(chatId);
-    if (card) {
-      await card.close('(会话已重置)').catch(() => {});
-      this.streamingCards.delete(chatId);
+    const agent = this.agents.get(chatId);
+    if (agent) {
+      await agent.destroy();
+      this.agents.delete(chatId);
     }
-
-    const session = this.sessions.get(chatId);
-    if (session) {
-      await session.launcher.kill();
-      session.bridge.detachProcess();
-      this.sessions.delete(chatId);
-      chatManager.clearSession(chatId);
-      logger.info('CLI session reset', { chatId, cwd: session.cwd, cliSessionId: session.sessionId });
-    } else {
-      chatManager.clearSession(chatId);
-      logger.info('CLI session reset (no active session)', { chatId });
-    }
+    chatManager.clearSession(chatId);
+    logger.info('[SessionManager] Session reset', { chatId });
   }
 
   getSessionInfo(chatId: string): string {
     const cwd = this.getCwd(chatId);
-    const session = this.sessions.get(chatId);
+    const agent = this.agents.get(chatId);
     const storedId = chatManager.getSessionId(chatId);
     const cwdLine = `工作目录: ${cwd}`;
-    if (!session && !storedId) return `${cwdLine}\n当前没有活跃的 Claude Code 会话`;
-    if (!session) return `${cwdLine}\n会话 ID: ${storedId}\n状态: 未运行（可恢复）`;
-    const alive = session.launcher.isAlive();
-    return `${cwdLine}\n会话 ID: ${session.sessionId}\n状态: ${alive ? '运行中' : '已断开'}`;
+    if (!agent && !storedId) return `${cwdLine}\n当前没有活跃的 Claude Code 会话`;
+    if (!agent) return `${cwdLine}\n会话 ID: ${storedId}\n状态: 未运行（可恢复）`;
+    const alive = agent.isAlive();
+    return `${cwdLine}\n会话 ID: ${agent.getSessionId()}\n状态: ${alive ? '运行中' : '已断开'}`;
   }
 
-  listResumableSessions(chatId: string): SessionSummary[] {
-    const cwd = this.getCwd(chatId);
-    const currentSessionId = this.sessions.get(chatId)?.sessionId
-      ?? chatManager.getSessionId(chatId);
-    return scanSessions(cwd).filter(s => s.sessionId !== currentSessionId);
-  }
-
-  async resumeSession(chatId: string, cliSessionId: string): Promise<boolean> {
-    const card = this.streamingCards.get(chatId);
-    if (card) {
-      await card.close('(正在恢复会话)').catch(() => {});
-      this.streamingCards.delete(chatId);
+  private getOrCreateAgent(chatId: string): Agent {
+    let agent = this.agents.get(chatId);
+    if (agent?.isAlive()) {
+      return agent;
     }
 
-    const current = this.sessions.get(chatId);
-    if (current) {
-      logger.info('Resuming CLI session, killing current session', {
-        chatId,
-        oldCliSessionId: current.sessionId,
-        newCliSessionId: cliSessionId,
-        cwd: current.cwd,
-      });
-      await current.launcher.kill();
-      current.bridge.detachProcess();
-      this.sessions.delete(chatId);
-    } else {
-      logger.info('Resuming CLI session', {
-        chatId,
-        cliSessionId,
-        cwd: this.getCwd(chatId),
-      });
+    if (agent) {
+      agent.destroy().catch(() => {});
+      this.agents.delete(chatId);
     }
 
-    const cwd = this.getCwd(chatId);
-    // 更新 store 映射，使 getOrCreateSession 能以 resume 模式启动
-    chatManager.setSession(chatId, cwd, cliSessionId);
-    const session = this.getOrCreateSession(chatId, cwd);
-
-    try {
-      await session.bridge.waitForInit();
-      logger.info('CLI session resumed successfully', { chatId, cliSessionId, cwd });
-      return true;
-    } catch (err) {
-      logger.error('CLI session resume failed', { chatId, cliSessionId, cwd, error: err });
-      return false;
-    }
-  }
-
-  private getOrCreateSession(chatId: string, cwd: string): Session {
-    let session = this.sessions.get(chatId);
-    if (session && session.cwd === cwd && session.launcher.isAlive()) {
-      return session;
-    }
-
-    // 清理旧的内存 session（cwd 不同或进程已死）
-    if (session) {
-      session.launcher.kill().catch(() => {});
-      this.sessions.delete(chatId);
-    }
-
+    const cwd = chatManager.getCwd(chatId);
     const storedSessionId = chatManager.getSessionId(chatId);
     const storedCwd = chatManager.getCwd(chatId);
-    // 只有当 cwd 匹配时才 resume
-    const canResume = storedSessionId && storedCwd === cwd;
-    const sessionId = canResume ? storedSessionId : randomUUID();
-    const resume = !!canResume;
+    const resumeSessionId = (storedSessionId && storedCwd === cwd) ? storedSessionId : undefined;
 
-    const bridge = new CLIBridge(sessionId);
-    const launcher = new CLILauncher(sessionId);
+    agent = new Agent(cwd, resumeSessionId);
+    this.agents.set(chatId, agent);
 
-    // 进程退出时清理流式卡片
-    launcher.onExit(() => {
-      const card = this.streamingCards.get(chatId);
-      if (card) {
-        card.close('(CLI 进程已退出)').catch(() => {});
-        this.streamingCards.delete(chatId);
-        logger.info('Streaming card closed due to CLI exit', { chatId, cliSessionId: sessionId });
-      }
+    agent.onResponse((text) => {
+      this.sendPlainText(chatId, text);
     });
 
-    if (config.streaming.enabled) {
-      bridge.setOnPartialText(async (accumulatedText) => {
-        let card = this.streamingCards.get(chatId);
-        if (!card) {
-          // 先占位防止并发重入创建多张卡片
-          card = new StreamingCard(chatId);
-          this.streamingCards.set(chatId, card);
-          const ok = await card.start();
-          if (!ok) {
-            this.streamingCards.delete(chatId);
-            return; // 创建失败，onResponse 时降级为纯文本
-          }
-        }
-        card.update(accumulatedText);
-      });
-
-      bridge.setOnResponse((text) => {
-        const callback = this.pendingCallbacks.get(chatId);
-        this.pendingCallbacks.delete(chatId);
-        if (callback) callback();
-
-        const card = this.streamingCards.get(chatId);
-        this.streamingCards.delete(chatId);
-
-        if (card) {
-          card.close(text).catch(err => {
-            logger.error('Failed to close streaming card, fallback to text', { chatId, error: err.message });
-            this.sendPlainText(chatId, text);
-          });
-        } else {
-          this.sendPlainText(chatId, text);
-        }
-      });
-    } else {
-      bridge.setOnResponse((text) => {
-        const callback = this.pendingCallbacks.get(chatId);
-        this.pendingCallbacks.delete(chatId);
-        if (callback) callback();
-
-        this.sendPlainText(chatId, text);
-      });
-    }
-
-    launcher.onExit((code) => {
-      if (!bridge.isInitialized()) {
-        bridge.rejectInit('CLI exited before init');
-        if (resume) {
-          logger.warn('Resume failed, clearing stored CLI session', { chatId, cliSessionId: sessionId, cwd, code });
-          chatManager.clearSession(chatId);
-        } else {
-          logger.error('CLI failed to start', { chatId, cliSessionId: sessionId, cwd, code });
-        }
-      }
+    agent.onError((error) => {
+      logger.error('[SessionManager] Agent error', { chatId, error: error.message });
+      messageService.sendTextMessage(chatId, `错误: ${error.message}`).catch(() => {});
     });
 
-    launcher.start({ resume, cwd });
-
-    // 启动后立即连接 bridge 和进程
-    const process = launcher.getProcess();
-    if (process) {
-      bridge.attachProcess(process);
+    if (!resumeSessionId) {
+      chatManager.setSession(chatId, cwd, agent.getSessionId());
     }
 
-    if (!resume) {
-      chatManager.setSession(chatId, cwd, sessionId);
-    }
-
-    session = { chatId, sessionId, cwd, bridge, launcher };
-    this.sessions.set(chatId, session);
-    logger.info(resume ? 'Resuming CLI session' : 'New CLI session created', { chatId, cliSessionId: sessionId, cwd });
-    return session;
+    return agent;
   }
 
   private sendPlainText(chatId: string, text: string): void {
     const MAX_LEN = 4000;
-    const session = this.sessions.get(chatId);
-    const cliSessionId = session?.sessionId;
     if (text.length <= MAX_LEN) {
       messageService.sendTextMessage(chatId, text).catch(err => {
-        logger.error('Failed to send response', { chatId, cliSessionId, error: err.message });
+        logger.error('[SessionManager] Failed to send response', { chatId, error: err.message });
       });
     } else {
       this.sendLongMessage(chatId, text, MAX_LEN);
@@ -275,61 +106,22 @@ export class SessionManager {
   }
 
   private async sendLongMessage(chatId: string, text: string, maxLen: number) {
-    const session = this.sessions.get(chatId);
-    const cliSessionId = session?.sessionId;
     for (let i = 0; i < text.length; i += maxLen) {
       const chunk = text.slice(i, i + maxLen);
       try {
         await messageService.sendTextMessage(chatId, chunk);
       } catch (err: any) {
-        logger.error('Failed to send chunk', { chatId, cliSessionId, error: err.message });
+        logger.error('[SessionManager] Failed to send chunk', { chatId, error: err.message });
       }
     }
   }
 
-
-  async closeStreamingCard(chatId: string): Promise<void> {
-    const card = this.streamingCards.get(chatId);
-    if (card) {
-      await card.close('(处理中断)').catch(() => {});
-      this.streamingCards.delete(chatId);
-    }
-  }
-
-  async restartAllSessions(): Promise<string[]> {
-    const affectedChats: string[] = [];
-
-    for (const [chatId, session] of this.sessions.entries()) {
-      affectedChats.push(chatId);
-
-      // 关闭流式卡片
-      await this.closeStreamingCard(chatId);
-
-      // 杀掉 CLI 进程
-      await session.launcher.kill();
-
-      logger.info('CLI session restarted for model change', {
-        chatId,
-        cliSessionId: session.sessionId,
-        cwd: session.cwd,
-      });
-    }
-
-    // 清空会话映射，下次消息时会自动重建
-    this.sessions.clear();
-
-    return affectedChats;
-  }
-
   async stop(): Promise<void> {
-    for (const [, card] of this.streamingCards) {
-      await card.close('(服务关闭)').catch(() => {});
+    for (const agent of this.agents.values()) {
+      await agent.destroy();
     }
-    this.streamingCards.clear();
-
-    for (const session of this.sessions.values()) {
-      await session.launcher.kill();
-    }
-    this.sessions.clear();
+    this.agents.clear();
+    logger.info('[SessionManager] Stopped');
   }
 }
+
