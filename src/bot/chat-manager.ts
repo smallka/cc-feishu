@@ -63,7 +63,6 @@ export class ChatManager {
       await agent.destroy();
       this.agents.delete(chatId);
     }
-    this.store.delete(chatId);
     this.store.set(chatId, { cwd: newCwd, sessionId: undefined });
     logger.info('[ChatManager] Switched cwd', { chatId, oldCwd: currentCwd, newCwd });
   }
