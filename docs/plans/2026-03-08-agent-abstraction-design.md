@@ -122,6 +122,42 @@ class Agent {
 - 向用户发送错误消息
 - **不负责清理 agents Map**（由 `getOrCreateAgent()` 统一处理）
 
+**destroyed 状态检查**：
+
+所有操作方法都需要检查 `destroyed` 状态：
+
+1. **sendMessage(text: string)**
+   ```typescript
+   if (this.destroyed) {
+     logger.warn('[Agent] Cannot send message, agent destroyed');
+     return;  // 静默返回，不抛异常
+   }
+   ```
+
+2. **interrupt()**
+   ```typescript
+   if (this.destroyed) {
+     logger.warn('[Agent] Cannot interrupt, agent destroyed');
+     return false;
+   }
+   ```
+
+3. **destroy(error?: Error)**
+   ```typescript
+   if (this.destroyed) {
+     return;  // 防止重复销毁
+   }
+   ```
+
+4. **isAlive()**
+   ```typescript
+   return !this.destroyed && this.launcher.isAlive();
+   ```
+
+**不需要检查 destroyed 的接口**：
+- `getAgentId()` / `getCwd()` / `getSessionId()` - 只读属性，即使销毁后仍可访问
+- `onResponse()` / `onError()` - 设置回调，不执行操作
+
 ### SessionManager 简化
 
 **核心变化**：
