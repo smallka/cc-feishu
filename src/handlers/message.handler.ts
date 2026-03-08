@@ -134,6 +134,7 @@ async function handleMessageInternal(data: MessageEvent, startTime: number): Pro
       '/stop — 打断任务',
       '/stat — 会话状态',
       '/cd [路径] — 切换目录',
+      '/debug — 系统调试信息',
     ].join('\n');
     await messageService.sendTextMessage(chatId, helpText);
     return;
@@ -160,6 +161,12 @@ async function handleMessageInternal(data: MessageEvent, startTime: number): Pro
   if (text === '/stat') {
     const info = chatManager.getSessionInfo(chatId);
     await messageService.sendTextMessage(chatId, info);
+    return;
+  }
+
+  if (text === '/debug') {
+    const info = chatManager.getDebugInfo();
+    await messageService.sendCardMessage(chatId, info);
     return;
   }
 

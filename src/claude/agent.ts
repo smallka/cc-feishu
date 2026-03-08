@@ -13,6 +13,7 @@ export class Agent {
   private readonly cwd: string;
   private readonly launcher: CLILauncher;
   private readonly bridge: CLIBridge;
+  private readonly startTime: number;
   private destroyed = false;
   private onResponseCallback: OnResponseCallback | null = null;
   private onErrorCallback: OnErrorCallback | null = null;
@@ -21,6 +22,7 @@ export class Agent {
     this.agentId = `agent${++agentCounter}`;
     this.chatId = chatId;
     this.cwd = cwd;
+    this.startTime = Date.now();
 
     logger.info('[Agent] Creating agent', {
       chatId,
@@ -176,5 +178,13 @@ export class Agent {
 
   onError(callback: OnErrorCallback): void {
     this.onErrorCallback = callback;
+  }
+
+  getStartTime(): number {
+    return this.startTime;
+  }
+
+  getPid(): number | undefined {
+    return this.launcher.getProcess()?.pid;
   }
 }

@@ -14,9 +14,11 @@ export class ChatManager {
   private agents = new Map<string, Agent>();
   private defaultCwd: string;
   private responseCompleteCallback: (() => void) | null = null;
+  private startTime: number;
 
   constructor() {
     this.defaultCwd = config.claude.workRoot;
+    this.startTime = Date.now();
   }
 
   async start(): Promise<void> {
@@ -88,6 +90,50 @@ export class ChatManager {
     if (!agent) return `${cwdLine}\n会话 ID: ${storedId}\n状态: 未运行（可恢复）`;
     const alive = agent.isAlive();
     return `${cwdLine}\n会话 ID: ${agent.getSessionId()}\n状态: ${alive ? '运行中' : '已断开'}`;
+  }
+
+  getDebugInfo(): string {
+    const systemUptime = Math.floor((Date.now() - this.startTime) / 1000);
+    const lines: string[] = [];
+    lines.push(`**系统调试信息**`);
+    lines.push(`\n系统运行时长: ${systemUptime}s`);
+    lines.push(`\nChat: ${this.chats.size} | Agent: ${this.agents.size}`);
+    lines.push(`\n---\n`);
+
+    if (this.chats.size === 0) {
+      lines.push('当前无 Chat');
+    } else {
+      for (const [chatId, data] of this.chats) {
+        const agent = this.agents.get(chatId);
+        const shortId = chatId.slice(0, 8);
+
+        if (agent) {
+          const uptime = Math.floor((Date.now() - agent.getStartTime()) / 1000);
+          const status = agent.isAlive() ? '✅' : '❌';
+          const sessionId = agent.getSessionId() || '无 sessionId';
+          lines.push(`\`${shortId}\` **→** \`${agent.getAgentId()}\` (${uptime}s ${status})`);
+          lines.push(`\n&emsp;&emsp;${agent.getCwd()} (${sessionId})\n`);
+        } else {
+          const sessionId = data.sessionId || '无 sessionId';
+          lines.push(`\`${shortId}\` **→** 无 Agent`);
+          lines.push(`\n&emsp;&emsp;${data.cwd} (${sessionId})\n`);
+        }
+      }
+
+      const orphanAgents = Array.from(this.agents.keys()).filter(id => !this.chats.has(id));
+      if (orphanAgents.length > 0) {
+        lines.push(`\n**孤立 Agent**\n`);
+        for (const chatId of orphanAgents) {
+          const agent = this.agents.get(chatId);
+          if (agent) {
+            const uptime = Math.floor((Date.now() - agent.getStartTime()) / 1000);
+            lines.push(`\`${agent.getAgentId()}\` (${uptime}s)\n`);
+          }
+        }
+      }
+    }
+
+    return lines.join('');
   }
 
   private getOrCreateAgent(chatId: string): Agent {
