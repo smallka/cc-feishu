@@ -6,8 +6,11 @@ import { CLIBridge } from './bridge';
 export type OnResponseCallback = (text: string) => void;
 export type OnErrorCallback = (error: Error) => void;
 
+let agentCounter = 0;
+
 export class Agent {
-  private readonly agentId: string;
+  private readonly agentId: number;
+  private readonly chatId: string;
   private readonly cwd: string;
   private readonly sessionId: string;
   private readonly launcher: CLILauncher;
@@ -16,17 +19,18 @@ export class Agent {
   private onResponseCallback: OnResponseCallback | null = null;
   private onErrorCallback: OnErrorCallback | null = null;
 
-  constructor(cwd: string, resumeSessionId?: string) {
-    this.agentId = randomUUID();
+  constructor(chatId: string, cwd: string, resumeSessionId?: string) {
+    this.agentId = ++agentCounter;
+    this.chatId = chatId;
     this.cwd = cwd;
     this.sessionId = resumeSessionId || randomUUID();
 
     logger.info('[Agent] Creating agent', {
+      chatId,
       agentId: this.agentId,
       sessionId: this.sessionId,
       cwd,
       isResume: !!resumeSessionId,
-      operation: 'create'
     });
 
     // 创建 launcher 和 bridge
@@ -35,9 +39,9 @@ export class Agent {
 
     // 设置 bridge 回调
     this.bridge.setOnResponse((text) => {
-      logger.debug('[Agent] Received response', {
+      logger.info('[Agent] Received response', {
+        chatId: this.chatId,
         agentId: this.agentId,
-        sessionId: this.sessionId,
         textLength: text.length,
       });
       if (this.onResponseCallback) {
@@ -48,8 +52,8 @@ export class Agent {
     // 监听进程退出
     this.launcher.onExit((code) => {
       logger.info('[Agent] CLI process exited', {
+        chatId: this.chatId,
         agentId: this.agentId,
-        sessionId: this.sessionId,
         code,
         wasDestroyed: this.destroyed
       });
@@ -78,17 +82,16 @@ export class Agent {
   async sendMessage(text: string): Promise<void> {
     if (this.destroyed) {
       logger.warn('[Agent] Cannot send message, agent destroyed', {
+        chatId: this.chatId,
         agentId: this.agentId,
-        sessionId: this.sessionId,
       });
       return;
     }
 
-    logger.debug('[Agent] Sending message', {
+    logger.info('[Agent] Sending message', {
+      chatId: this.chatId,
       agentId: this.agentId,
-      sessionId: this.sessionId,
       messageLength: text.length,
-      operation: 'send'
     });
 
     try {
@@ -104,16 +107,15 @@ export class Agent {
   interrupt(): boolean {
     if (this.destroyed) {
       logger.warn('[Agent] Cannot interrupt, agent destroyed', {
+        chatId: this.chatId,
         agentId: this.agentId,
-        sessionId: this.sessionId,
       });
       return false;
     }
 
     logger.info('[Agent] Interrupting', {
+      chatId: this.chatId,
       agentId: this.agentId,
-      sessionId: this.sessionId,
-      operation: 'interrupt'
     });
 
     return this.bridge.sendInterrupt();
@@ -127,8 +129,8 @@ export class Agent {
     this.destroyed = true;
 
     logger.info('[Agent] Destroying agent', {
+      chatId: this.chatId,
       agentId: this.agentId,
-      sessionId: this.sessionId,
       hasError: !!error,
       error: error?.message,
     });

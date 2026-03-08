@@ -101,7 +101,7 @@ export class SessionManager {
       willResume: !!resumeSessionId
     });
 
-    agent = new Agent(cwd, resumeSessionId);
+    agent = new Agent(chatId, cwd, resumeSessionId);
     this.agents.set(chatId, agent);
 
     agent.onResponse((text) => {
