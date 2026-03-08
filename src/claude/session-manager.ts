@@ -16,15 +16,24 @@ export class SessionManager {
 
   async sendMessage(chatId: string, text: string): Promise<void> {
     const agent = this.getOrCreateAgent(chatId);
+    logger.debug('[SessionManager] Sending message', {
+      chatId,
+      agentId: agent.getAgentId(),
+      sessionId: agent.getSessionId(),
+      messageLength: text.length
+    });
     await agent.sendMessage(text);
   }
 
   interruptSession(chatId: string): 'success' | 'no_session' | 'not_running' {
     const agent = this.agents.get(chatId);
     if (!agent) {
+      logger.warn('[SessionManager] No agent to interrupt', { chatId });
       return 'no_session';
     }
-    return agent.interrupt() ? 'success' : 'not_running';
+    const result = agent.interrupt() ? 'success' : 'not_running';
+    logger.info('[SessionManager] Interrupt result', { chatId, agentId: agent.getAgentId(), result });
+    return result;
   }
 
   async switchCwd(chatId: string, newCwd: string): Promise<void> {
@@ -62,10 +71,20 @@ export class SessionManager {
   private getOrCreateAgent(chatId: string): Agent {
     let agent = this.agents.get(chatId);
     if (agent?.isAlive()) {
+      logger.debug('[SessionManager] Reusing existing agent', {
+        chatId,
+        agentId: agent.getAgentId(),
+        sessionId: agent.getSessionId()
+      });
       return agent;
     }
 
     if (agent) {
+      logger.info('[SessionManager] Cleaning up dead agent', {
+        chatId,
+        agentId: agent.getAgentId(),
+        sessionId: agent.getSessionId()
+      });
       agent.destroy().catch(() => {});
       this.agents.delete(chatId);
     }
@@ -75,10 +94,22 @@ export class SessionManager {
     const storedCwd = chatManager.getCwd(chatId);
     const resumeSessionId = (storedSessionId && storedCwd === cwd) ? storedSessionId : undefined;
 
+    logger.info('[SessionManager] Creating new agent', {
+      chatId,
+      cwd,
+      resumeSessionId,
+      willResume: !!resumeSessionId
+    });
+
     agent = new Agent(cwd, resumeSessionId);
     this.agents.set(chatId, agent);
 
     agent.onResponse((text) => {
+      logger.debug('[SessionManager] Agent response received', {
+        chatId,
+        agentId: agent.getAgentId(),
+        textLength: text.length
+      });
       this.sendPlainText(chatId, text);
     });
 
@@ -97,7 +128,9 @@ export class SessionManager {
   private sendPlainText(chatId: string, text: string): void {
     const MAX_LEN = 4000;
     if (text.length <= MAX_LEN) {
-      messageService.sendTextMessage(chatId, text).catch(err => {
+      messageService.sendTextMessage(chatId, text).then(() => {
+        logger.debug('[SessionManager] Response sent', { chatId, textLength: text.length });
+      }).catch(err => {
         logger.error('[SessionManager] Failed to send response', { chatId, error: err.message });
       });
     } else {
