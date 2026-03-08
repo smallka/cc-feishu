@@ -1,11 +1,9 @@
 import { existsSync, statSync } from 'fs';
 import { resolve, isAbsolute } from 'path';
 import logger from '../utils/logger';
-import { SessionManager } from '../claude/session-manager';
+import { chatManager } from '../bot/chat-manager';
 import messageService from '../services/message.service';
 import config from '../config';
-
-let sessionManager: SessionManager | null = null;
 
 // 消息去重：缓存已处理的 message_id
 const processedMessages = new Set<string>();
@@ -14,17 +12,13 @@ const MAX_CACHE_SIZE = 500;
 // 表情队列：按顺序存储待移除的表情
 const reactionQueue: Array<{ messageId: string; reactionId: string }> = [];
 
-export function setSessionManager(sm: SessionManager) {
-  sessionManager = sm;
-
-  // 注册响应完成回调，按顺序移除表情
-  sm.onResponseComplete(() => {
-    const reaction = reactionQueue.shift();
-    if (reaction) {
-      messageService.removeReaction(reaction.messageId, reaction.reactionId).catch(() => {});
-    }
-  });
-}
+// 注册响应完成回调，按顺序移除表情
+chatManager.onResponseComplete(() => {
+  const reaction = reactionQueue.shift();
+  if (reaction) {
+    messageService.removeReaction(reaction.messageId, reaction.reactionId).catch(() => {});
+  }
+});
 
 interface MessageEvent {
   sender: {
@@ -105,7 +99,7 @@ export async function handleMessage(data: MessageEvent): Promise<void> {
 
       if (config.claude.messageTimeoutAction === 'kill') {
         logger.info('Terminating session due to timeout', { chatId: message.chat_id });
-        await sessionManager?.resetSession(message.chat_id);
+        await chatManager.reset(message.chat_id);
       }
     } else {
       logger.error('Error handling message event', { error, duration });
@@ -147,11 +141,7 @@ async function handleMessageInternal(data: MessageEvent, startTime: number): Pro
   }
 
   if (text === '/stop') {
-    if (!sessionManager) {
-      await messageService.sendTextMessage(chatId, 'Claude Code 服务未就绪。');
-      return;
-    }
-    const result = sessionManager.interruptSession(chatId);
+    const result = chatManager.interrupt(chatId);
     if (result === 'success') {
       await messageService.sendTextMessage(chatId, '⏸️ 已发送打断指令，AI 将停止当前任务');
     } else if (result === 'no_session') {
@@ -163,25 +153,21 @@ async function handleMessageInternal(data: MessageEvent, startTime: number): Pro
   }
 
   if (text === '/new') {
-    await sessionManager?.resetSession(chatId);
-    const cwd = sessionManager?.getCwd(chatId) ?? config.claude.workRoot;
+    await chatManager.reset(chatId);
+    const cwd = chatManager.getCwd(chatId);
     await messageService.sendTextMessage(chatId, `会话已重置，可以开始新的对话。\n工作目录: ${cwd}`);
     return;
   }
 
   if (text === '/status') {
-    const info = sessionManager?.getSessionInfo(chatId) || '未初始化';
+    const info = chatManager.getSessionInfo(chatId);
     await messageService.sendTextMessage(chatId, info);
     return;
   }
 
   if (text === '/cd') {
     const defaultCwd = config.claude.workRoot;
-    if (!sessionManager) {
-      await messageService.sendTextMessage(chatId, 'Claude Code 服务未就绪，请稍后再试。');
-      return;
-    }
-    await sessionManager.switchCwd(chatId, defaultCwd);
+    await chatManager.switchCwd(chatId, defaultCwd);
     await messageService.sendTextMessage(chatId, `已切换到默认工作目录:\n${defaultCwd}`);
     return;
   }
@@ -194,11 +180,7 @@ async function handleMessageInternal(data: MessageEvent, startTime: number): Pro
       await messageService.sendTextMessage(chatId, `目录不存在: ${input}`);
       return;
     }
-    if (!sessionManager) {
-      await messageService.sendTextMessage(chatId, 'Claude Code 服务未就绪，请稍后再试。');
-      return;
-    }
-    await sessionManager.switchCwd(chatId, target);
+    await chatManager.switchCwd(chatId, target);
     await messageService.sendTextMessage(chatId, `工作目录已切换到: ${target}`);
     return;
   }
@@ -209,18 +191,13 @@ async function handleMessageInternal(data: MessageEvent, startTime: number): Pro
     return;
   }
 
-  if (!sessionManager) {
-    await messageService.sendTextMessage(chatId, 'Claude Code 服务未就绪，请稍后再试。');
-    return;
-  }
-
   // 转发给 Claude Code
   const reactionId = await messageService.addReaction(message.message_id, 'Typing');
   if (reactionId) {
     reactionQueue.push({ messageId: message.message_id, reactionId });
   }
 
-  await sessionManager.sendMessage(chatId, text);
+  await chatManager.sendMessage(chatId, text);
 
   // 记录处理时长
   const duration = Date.now() - startTime;

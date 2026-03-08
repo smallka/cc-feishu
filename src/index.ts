@@ -1,10 +1,7 @@
 import logger from './utils/logger';
 import config from './config';
 import websocketManager from './bot/websocket';
-import { SessionManager } from './claude/session-manager';
-import { setSessionManager } from './handlers/message.handler';
-
-let sessionManager: SessionManager | null = null;
+import { chatManager } from './bot/chat-manager';
 
 async function bootstrap() {
   try {
@@ -13,10 +10,8 @@ async function bootstrap() {
       appId: config.feishu.appId,
     });
 
-    // 启动 Claude Code Session Manager
-    sessionManager = new SessionManager();
-    await sessionManager.start();
-    setSessionManager(sessionManager);
+    // 启动 ChatManager
+    await chatManager.start();
 
     // 启动飞书 WebSocket 连接
     await websocketManager.start();
@@ -31,7 +26,7 @@ async function bootstrap() {
 // 优雅关闭
 async function shutdown() {
   logger.info('Shutting down gracefully');
-  await sessionManager?.stop();
+  await chatManager.stop();
   await websocketManager.stop();
   process.exit(0);
 }
