@@ -82,14 +82,21 @@ export class ChatManager {
 
   getSessionInfo(chatId: string): string {
     const data = this.chats.get(chatId);
-    const cwd = data?.cwd ?? this.defaultCwd;
     const agent = this.agents.get(chatId);
-    const storedId = data?.sessionId;
-    const cwdLine = `工作目录: ${cwd}`;
-    if (!agent && !storedId) return `${cwdLine}\n当前没有活跃的 Claude Code 会话`;
-    if (!agent) return `${cwdLine}\n会话 ID: ${storedId}\n状态: 未运行（可恢复）`;
-    const alive = agent.isAlive();
-    return `${cwdLine}\n会话 ID: ${agent.getSessionId()}\n状态: ${alive ? '运行中' : '已断开'}`;
+
+    if (!data && !agent) {
+      return `工作目录: ${this.defaultCwd}\n当前没有活跃的 Claude Code 会话`;
+    }
+
+    if (agent) {
+      const uptime = Math.floor((Date.now() - agent.getStartTime()) / 1000);
+      const status = agent.isAlive() ? '运行中 ✅' : '已断开 ❌';
+      const sessionId = agent.getSessionId() || '无 sessionId';
+      return `工作目录: ${agent.getCwd()}\nSession: ${sessionId}\nAgent: ${agent.getAgentId()} (${uptime}s, ${status})`;
+    }
+
+    const sessionId = data?.sessionId || '无 sessionId';
+    return `工作目录: ${data?.cwd ?? this.defaultCwd}\nSession: ${sessionId}\n状态: 未运行（可恢复）`;
   }
 
   getDebugInfo(): string {
