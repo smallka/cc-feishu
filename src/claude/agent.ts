@@ -12,7 +12,6 @@ export class Agent {
   private readonly agentId: number;
   private readonly chatId: string;
   private readonly cwd: string;
-  private readonly sessionId: string;
   private readonly launcher: CLILauncher;
   private readonly bridge: CLIBridge;
   private destroyed = false;
@@ -23,19 +22,19 @@ export class Agent {
     this.agentId = ++agentCounter;
     this.chatId = chatId;
     this.cwd = cwd;
-    this.sessionId = resumeSessionId || randomUUID();
+    const sessionId = resumeSessionId || randomUUID();
 
     logger.info('[Agent] Creating agent', {
       chatId,
       agentId: this.agentId,
-      sessionId: this.sessionId,
+      sessionId,
       cwd,
       isResume: !!resumeSessionId,
     });
 
     // 创建 launcher 和 bridge
-    this.launcher = new CLILauncher(this.sessionId);
-    this.bridge = new CLIBridge(this.sessionId);
+    this.launcher = new CLILauncher(sessionId);
+    this.bridge = new CLIBridge(sessionId);
 
     // 设置 bridge 回调
     this.bridge.setOnResponse((text) => {
@@ -166,7 +165,7 @@ export class Agent {
   }
 
   getSessionId(): string {
-    return this.sessionId;
+    return this.bridge.getSessionId();
   }
 
   isAlive(): boolean {

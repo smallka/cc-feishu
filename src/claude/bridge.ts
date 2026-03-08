@@ -17,7 +17,7 @@ export class CLIBridge {
   private onComplete: (() => Promise<void>) | null = null;
   private initialized = false;
   private initWaiters: Array<{ resolve: () => void; reject: (err: Error) => void; timer: ReturnType<typeof setTimeout> }> = [];
-  readonly sessionId: string;
+  private sessionId: string;
 
   constructor(sessionId: string) {
     this.sessionId = sessionId;
@@ -25,6 +25,10 @@ export class CLIBridge {
 
   isInitialized(): boolean {
     return this.initialized;
+  }
+
+  getSessionId(): string {
+    return this.sessionId;
   }
 
   /**
@@ -157,9 +161,22 @@ export class CLIBridge {
 
       case 'system':
         if ('subtype' in msg && msg.subtype === 'init') {
+          const initMsg = msg as any;
+          const actualSessionId = initMsg.session_id;
+          const sessionChanged = actualSessionId !== this.sessionId;
+
+          if (sessionChanged) {
+            logger.info('[CLIBridge] Session ID updated', {
+              oldSessionId: this.sessionId,
+              newSessionId: actualSessionId,
+            });
+            this.sessionId = actualSessionId;
+          }
+
           logger.info('[CLIBridge] CLI session initialized', {
             sessionId: this.sessionId,
-            model: msg.model,
+            sessionChanged,
+            model: initMsg.model,
           });
         }
         break;

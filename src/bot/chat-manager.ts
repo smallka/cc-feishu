@@ -6,6 +6,8 @@ import config from '../config';
 interface ChatData {
   cwd: string;
   sessionId: string | undefined;
+  expectedSessionId?: string;
+  sessionNotified?: boolean;
 }
 
 export class ChatManager {
@@ -50,6 +52,12 @@ export class ChatManager {
   }
 
   async switchCwd(chatId: string, newCwd: string): Promise<void> {
+    const data = this.store.get(chatId);
+    const currentCwd = data?.cwd ?? this.defaultCwd;
+    if (currentCwd === newCwd) {
+      logger.debug('[ChatManager] Cwd unchanged, skipping switch', { chatId, cwd: newCwd });
+      return;
+    }
     const agent = this.agents.get(chatId);
     if (agent) {
       await agent.destroy();
@@ -57,7 +65,7 @@ export class ChatManager {
     }
     this.store.delete(chatId);
     this.store.set(chatId, { cwd: newCwd, sessionId: undefined });
-    logger.info('[ChatManager] Switched cwd', { chatId, newCwd });
+    logger.info('[ChatManager] Switched cwd', { chatId, oldCwd: currentCwd, newCwd });
   }
 
   async reset(chatId: string): Promise<string> {
@@ -120,7 +128,34 @@ export class ChatManager {
     agent = new Agent(chatId, cwd, resumeSessionId);
     this.agents.set(chatId, agent);
 
+    const expectedSessionId = agent.getSessionId();
+
     agent.onResponse((text) => {
+      const data = this.store.get(chatId);
+
+      // 第一次响应时检查 session 是否变化
+      if (data && !data.sessionNotified) {
+        const actualSessionId = agent.getSessionId();
+        const sessionChanged = actualSessionId !== expectedSessionId;
+
+        if (sessionChanged || !resumeSessionId) {
+          // session 变化了，或者是新建的
+          let message = '';
+          if (!resumeSessionId) {
+            message = `🆕 新会话: ${cwd} (${actualSessionId})`;
+          } else if (sessionChanged) {
+            message = `⚠️ 恢复失败，已创建新会话: ${cwd} (${actualSessionId})`;
+          }
+
+          if (message) {
+            messageService.sendTextMessage(chatId, message).catch(() => {});
+          }
+        }
+
+        // 标记已通知，更新实际 sessionId
+        this.store.set(chatId, { ...data, sessionNotified: true, sessionId: actualSessionId });
+      }
+
       logger.debug('[ChatManager] Agent response received', {
         chatId,
         agentId: agent.getAgentId(),
