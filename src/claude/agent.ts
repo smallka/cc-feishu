@@ -79,7 +79,7 @@ export class Agent {
     }
   }
 
-  async sendMessage(text: string): Promise<void> {
+  async sendMessage(text: string, onComplete?: () => Promise<void>): Promise<void> {
     if (this.destroyed) {
       logger.warn('[Agent] Cannot send message, agent destroyed', {
         chatId: this.chatId,
@@ -101,7 +101,7 @@ export class Agent {
       throw err;
     }
 
-    this.bridge.sendUserMessage(text);
+    this.bridge.sendUserMessage(text, onComplete);
   }
 
   interrupt(): boolean {

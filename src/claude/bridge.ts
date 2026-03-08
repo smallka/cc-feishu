@@ -14,6 +14,7 @@ export class CLIBridge {
   private collectedText: string[] = [];
   private onResponse: OnResponseCallback | null = null;
   private onPartialText: OnPartialTextCallback | null = null;
+  private onComplete: (() => Promise<void>) | null = null;
   private initialized = false;
   private initWaiters: Array<{ resolve: () => void; reject: (err: Error) => void; timer: ReturnType<typeof setTimeout> }> = [];
   readonly sessionId: string;
@@ -106,7 +107,7 @@ export class CLIBridge {
     });
   }
 
-  sendUserMessage(text: string) {
+  sendUserMessage(text: string, onComplete?: () => Promise<void>) {
     const ndjson = JSON.stringify({
       type: 'user',
       message: { role: 'user', content: text },
@@ -114,6 +115,7 @@ export class CLIBridge {
       session_id: this.sessionId,
     });
     this.collectedText = [];
+    this.onComplete = onComplete || null;
     this.sendRaw(ndjson);
   }
 
@@ -132,6 +134,11 @@ export class CLIBridge {
   }
 
   private routeMessage(msg: CLIMessage) {
+    logger.debug('[CLIBridge] Received message', {
+      sessionId: this.sessionId,
+      messageType: msg.type,
+    });
+
     switch (msg.type) {
       case 'control_response':
         // 处理初始化响应
@@ -195,9 +202,22 @@ export class CLIBridge {
     if (text && this.onResponse) {
       this.onResponse(text);
     }
+    if (this.onComplete) {
+      this.onComplete().catch(err => {
+        logger.error('[CLIBridge] onComplete callback failed', { error: err });
+      });
+      this.onComplete = null;
+    }
   }
 
   private handleControlRequest(msg: CLIControlRequestMessage) {
+    logger.info('[CLIBridge] Received control_request', {
+      sessionId: this.sessionId,
+      subtype: msg.request?.subtype,
+      toolName: msg.request?.tool_name,
+      requestId: msg.request_id,
+    });
+
     // MVP: 自动批准所有工具请求
     const ndjson = JSON.stringify({
       type: 'control_response',
@@ -210,7 +230,7 @@ export class CLIBridge {
         },
       },
     });
-    logger.debug('[CLIBridge] Auto-approving tool', {
+    logger.info('[CLIBridge] Auto-approving tool', {
       tool: msg.request.tool_name,
       sessionId: this.sessionId,
     });

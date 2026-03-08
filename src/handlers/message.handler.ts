@@ -128,7 +128,7 @@ async function handleMessageInternal(data: MessageEvent, startTime: number): Pro
       '/new — 重置当前会话，开始新对话',
       '/stop — 打断 AI 当前任务（不销毁会话）',
       '/status — 查看当前会话状态和工作目录',
-      '/cd — 列出所有已记录的工作目录',
+      '/cd — 切换到默认工作目录',
       '/cd <路径> — 切换工作目录（绝对路径或相对路径）',
     ].join('\n');
     await messageService.sendTextMessage(chatId, helpText);
@@ -205,13 +205,11 @@ async function handleMessageInternal(data: MessageEvent, startTime: number): Pro
 
   // 转发给 Claude Code
   const reactionId = await messageService.addReaction(message.message_id, 'Typing');
-  try {
-    await sessionManager.sendMessage(chatId, text);
-  } finally {
+  await sessionManager.sendMessage(chatId, text, async () => {
     if (reactionId) {
       await messageService.removeReaction(message.message_id, reactionId);
     }
-  }
+  });
 
   // 记录处理时长
   const duration = Date.now() - startTime;

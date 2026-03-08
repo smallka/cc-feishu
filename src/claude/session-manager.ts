@@ -14,7 +14,7 @@ export class SessionManager {
     return chatManager.getCwd(chatId);
   }
 
-  async sendMessage(chatId: string, text: string): Promise<void> {
+  async sendMessage(chatId: string, text: string, onComplete?: () => Promise<void>): Promise<void> {
     const agent = this.getOrCreateAgent(chatId);
     logger.debug('[SessionManager] Sending message', {
       chatId,
@@ -22,7 +22,7 @@ export class SessionManager {
       sessionId: agent.getSessionId(),
       messageLength: text.length
     });
-    await agent.sendMessage(text);
+    await agent.sendMessage(text, onComplete);
   }
 
   interruptSession(chatId: string): 'success' | 'no_session' | 'not_running' {
