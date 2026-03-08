@@ -26,13 +26,6 @@ export class ChatManager {
     this.responseCompleteCallback = callback;
   }
 
-  getCwd(chatId: string): string {
-    return this.store.get(chatId)?.cwd ?? this.defaultCwd;
-  }
-
-  getSessionId(chatId: string): string | undefined {
-    return this.store.get(chatId)?.sessionId;
-  }
 
   async sendMessage(chatId: string, text: string): Promise<void> {
     const agent = this.getOrCreateAgent(chatId);
@@ -67,20 +60,23 @@ export class ChatManager {
     logger.info('[ChatManager] Switched cwd', { chatId, newCwd });
   }
 
-  async reset(chatId: string): Promise<void> {
+  async reset(chatId: string): Promise<string> {
     const agent = this.agents.get(chatId);
     if (agent) {
       await agent.destroy();
       this.agents.delete(chatId);
     }
+    const cwd = this.store.get(chatId)?.cwd ?? this.defaultCwd;
     this.store.delete(chatId);
     logger.info('[ChatManager] Session reset', { chatId });
+    return cwd;
   }
 
   getSessionInfo(chatId: string): string {
-    const cwd = this.getCwd(chatId);
+    const data = this.store.get(chatId);
+    const cwd = data?.cwd ?? this.defaultCwd;
     const agent = this.agents.get(chatId);
-    const storedId = this.getSessionId(chatId);
+    const storedId = data?.sessionId;
     const cwdLine = `工作目录: ${cwd}`;
     if (!agent && !storedId) return `${cwdLine}\n当前没有活跃的 Claude Code 会话`;
     if (!agent) return `${cwdLine}\n会话 ID: ${storedId}\n状态: 未运行（可恢复）`;
@@ -109,10 +105,10 @@ export class ChatManager {
       this.agents.delete(chatId);
     }
 
-    const cwd = this.getCwd(chatId);
-    const storedSessionId = this.getSessionId(chatId);
-    const storedCwd = this.getCwd(chatId);
-    const resumeSessionId = (storedSessionId && storedCwd === cwd) ? storedSessionId : undefined;
+    const data = this.store.get(chatId);
+    const cwd = data?.cwd ?? this.defaultCwd;
+    const storedSessionId = data?.sessionId;
+    const resumeSessionId = (storedSessionId && data?.cwd === cwd) ? storedSessionId : undefined;
 
     logger.info('[ChatManager] Creating new agent', {
       chatId,
@@ -141,9 +137,7 @@ export class ChatManager {
       messageService.sendTextMessage(chatId, `错误: ${error.message}`).catch(() => {});
     });
 
-    if (!resumeSessionId) {
-      this.store.set(chatId, { cwd, sessionId: agent.getSessionId() });
-    }
+    this.store.set(chatId, { cwd, sessionId: agent.getSessionId() });
 
     return agent;
   }

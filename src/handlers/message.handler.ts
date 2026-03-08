@@ -153,8 +153,7 @@ async function handleMessageInternal(data: MessageEvent, startTime: number): Pro
   }
 
   if (text === '/new') {
-    await chatManager.reset(chatId);
-    const cwd = chatManager.getCwd(chatId);
+    const cwd = await chatManager.reset(chatId);
     await messageService.sendTextMessage(chatId, `会话已重置，可以开始新的对话。\n工作目录: ${cwd}`);
     return;
   }
