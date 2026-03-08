@@ -22,12 +22,15 @@ cc-feishu/
 │   ├── bot/
 │   │   ├── client.ts           # 飞书客户端
 │   │   └── websocket.ts        # 飞书 WebSocket 连接管理
+│   ├── bot/
+│   │   ├── client.ts           # 飞书客户端
+│   │   ├── websocket.ts        # 飞书 WebSocket 连接管理
+│   │   └── chat-store.ts       # Chat 会话信息内存存储
 │   ├── claude/
 │   │   ├── types.ts            # Claude Code CLI NDJSON 协议类型
 │   │   ├── bridge.ts           # CLI 消息桥接（stdin/stdout 协议解析、自动审批）
 │   │   ├── launcher.ts         # Claude Code CLI 进程管理（stdio 模式）
 │   │   ├── session-manager.ts  # 会话管理（chat+cwd → session 映射）
-│   │   ├── session-store.ts    # 会话持久化存储
 │   │   └── session-scanner.ts  # 会话扫描和恢复
 │   ├── handlers/
 │   │   └── message.handler.ts  # 消息事件处理
