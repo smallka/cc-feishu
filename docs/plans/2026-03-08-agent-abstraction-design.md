@@ -218,10 +218,13 @@ private getOrCreateAgent(chatId: string): Agent {
     ? storedSessionId
     : undefined;
 
-  // 5. 创建新 Agent
+  // 5. 创建新 Agent（同步构造函数，立即返回）
   agent = new Agent(cwd, resumeSessionId);
 
-  // 6. 设置回调
+  // 6. 立即保存到 Map（防止并发创建）
+  this.agents.set(chatId, agent);
+
+  // 7. 设置回调
   agent.onResponse((text) => {
     this.sendPlainText(chatId, text);
   });
@@ -233,9 +236,6 @@ private getOrCreateAgent(chatId: string): Agent {
     messageService.sendTextMessage(chatId, `错误: ${error.message}`);
   });
 
-  // 7. 保存到 Map
-  this.agents.set(chatId, agent);
-
   // 8. 如果是新会话，持久化 sessionId
   if (!resumeSessionId) {
     chatManager.setSession(chatId, cwd, agent.getSessionId());
@@ -244,6 +244,43 @@ private getOrCreateAgent(chatId: string): Agent {
   return agent;
 }
 ```
+
+**并发安全说明**：
+- Agent 构造函数是同步的，立即返回
+- 创建后立即放入 `agents` Map，阻止并发创建
+- CLI 进程在后台启动，`sendMessage()` 时才等待初始化
+- 无需 Promise 缓存或锁机制
+
+**消息串行化处理**：
+
+当前代码存在的问题：
+- `collectedText` 被后续消息清空（bridge.ts:116）
+- `pendingCallbacks` 被覆盖（session-manager.ts:40）
+- `result` 没有请求级关联，导致消息混淆
+
+新设计的解决方案：
+```typescript
+// SessionManager
+async sendMessage(chatId: string, text: string): Promise<void> {
+  const agent = this.getOrCreateAgent(chatId);
+  await agent.sendMessage(text);  // await 确保串行处理
+}
+
+// message.handler.ts
+const reactionId = await messageService.addReaction(message.message_id, 'Typing');
+try {
+  await sessionManager.sendMessage(chatId, text);  // 等待完成
+} finally {
+  if (reactionId) {
+    await messageService.removeReaction(message.message_id, reactionId);
+  }
+}
+```
+
+关键机制：
+- `sendMessage()` 是 async，等待 CLI 返回 result 才 resolve
+- handler 层面 await，自然串行化用户消息
+- 一个 Agent 同时只处理一条消息，避免状态混淆
 
 **生命周期管理**：
 - **chatId 第一次发消息**：创建 Agent
@@ -283,25 +320,91 @@ try {
 - 使用 `try-finally` 确保 Typing reaction 总是被移除
 - 更简单、更可靠
 
-## 日志追踪
+## 日志规范
 
-通过 `agentId` 追踪完整生命周期：
+### 日志级别
 
-```
-[Agent] Creating agent { agentId: 'abc-123', sessionId: 'xyz-789', cwd: '/path', isResume: false }
-[Agent] Starting CLI process { agentId: 'abc-123', sessionId: 'xyz-789', resume: false }
-[Agent] Sending message { agentId: 'abc-123', sessionId: 'xyz-789', messageLength: 42 }
-[Agent] Received response { agentId: 'abc-123', sessionId: 'xyz-789', textLength: 1024 }
-[Agent] Interrupting { agentId: 'abc-123', sessionId: 'xyz-789' }
-[Agent] Destroying agent { agentId: 'abc-123', sessionId: 'xyz-789' }
-```
+- **DEBUG**：详细的执行流程、函数参数、状态变化
+- **INFO**：关键操作、Agent 生命周期、命令执行结果
+- **WARN**：可恢复的异常、降级处理
+- **ERROR**：错误和异常
 
-**日志上下文字段**：
+### 日志上下文字段
+
+每条日志必须包含相关的上下文信息，方便追踪和关联：
+
+**Agent 相关**：
 - `agentId` - Agent 唯一标识
 - `sessionId` - CLI 会话 ID
-- `chatId` - 飞书会话 ID
 - `cwd` - 工作目录
-- `messageLength` / `textLength` - 消息长度
+- `isResume` - 是否为 resume 模式
+
+**Chat 相关**：
+- `chatId` - 飞书 chat ID
+
+**消息相关**：
+- `messageLength` / `textLength` - 消息长度（字符数）
+- **不记录消息实际内容**（保护隐私）
+
+**操作相关**：
+- `operation` - 操作类型（create/send/interrupt/destroy）
+- `wasDestroyed` - 销毁前的状态
+
+### 日志示例
+
+```typescript
+// Agent 创建
+logger.info('[Agent] Creating agent', {
+  agentId: this.agentId,
+  sessionId: this.sessionId,
+  cwd: this.cwd,
+  isResume: !!resumeSessionId,
+  operation: 'create'
+});
+
+// 发送消息
+logger.debug('[Agent] Sending message', {
+  agentId: this.agentId,
+  sessionId: this.sessionId,
+  messageLength: text.length,
+  operation: 'send'
+});
+
+// 进程退出
+logger.info('[Agent] CLI process exited', {
+  agentId: this.agentId,
+  sessionId: this.sessionId,
+  code,
+  wasDestroyed: this.destroyed,
+});
+
+// 错误
+logger.error('[Agent] Failed to initialize', {
+  agentId: this.agentId,
+  sessionId: this.sessionId,
+  error: error.message,
+});
+```
+
+### 完整生命周期日志
+
+```
+[Agent] Creating agent { agentId: 'abc-123', sessionId: 'xyz-789', cwd: '/path', isResume: false, operation: 'create' }
+[Agent] Starting CLI process { agentId: 'abc-123', sessionId: 'xyz-789', resume: false }
+[Agent] Sending message { agentId: 'abc-123', sessionId: 'xyz-789', messageLength: 42, operation: 'send' }
+[Agent] Received response { agentId: 'abc-123', sessionId: 'xyz-789', textLength: 1024 }
+[Agent] Interrupting { agentId: 'abc-123', sessionId: 'xyz-789', operation: 'interrupt' }
+[Agent] CLI process exited { agentId: 'abc-123', sessionId: 'xyz-789', code: 1, wasDestroyed: false }
+[Agent] Destroying agent { agentId: 'abc-123', sessionId: 'xyz-789', hasError: true, operation: 'destroy' }
+```
+
+### 日志目标
+
+通过分析日志应该能够：
+1. 追踪一条消息的完整流程（从接收到响应）
+2. 调试 Agent 创建失败的原因
+3. 分析异常退出的原因和时序
+4. 关联相关的操作（通过 chatId/agentId/sessionId）
 
 ## 文件结构
 
@@ -339,6 +442,10 @@ src/claude/
 5. **restartAllSessions() 方法**
    - 移除批量重启会话的功能
    - 如需重启，通过 `/new` 命令逐个处理
+
+6. **/model 运行时切模命令**
+   - 本迭代暂不支持运行时切换模型
+   - 移除 `/model` 命令入口，避免依赖批量重启逻辑
 
 ## 优势
 
@@ -392,9 +499,10 @@ src/claude/
 1. 创建 `src/claude/agent.ts`，实现 Agent 类
 2. 修改 `src/claude/session-manager.ts`，使用 Agent 替代 Session
 3. 修改 `src/handlers/message.handler.ts`，调整 Typing reaction 处理
-4. 移除 `src/services/streaming-card.ts`（如果不再需要）
-5. 更新相关测试
-6. 验证功能：消息发送、中断、切换目录、重置会话
+4. 修改 `src/handlers/message.handler.ts`，移除 `/model` 命令分支和帮助文案
+5. 移除 `src/services/streaming-card.ts`（如果不再需要）
+6. 更新相关测试
+7. 验证功能：消息发送、中断、切换目录、重置会话
 
 ## 风险和注意事项
 
@@ -412,3 +520,4 @@ src/claude/
 3. **重试机制**：在 Agent 层面实现自动重试
 4. **超时控制**：在 Agent 层面实现消息超时控制
 5. **状态机**：将 Agent 改为状态机，更清晰地管理状态转换
+6. **运行时切模**：在具备明确会话重启策略后，恢复 `/model` 命令

@@ -1,25 +1,11 @@
 import { randomUUID } from 'crypto';
 import logger from '../utils/logger';
-import { CLIBridge } from './bridge';
-import { CLILauncher } from './launcher';
 import { chatManager } from '../bot/chat-manager';
-import { scanSessions, SessionSummary } from './session-scanner';
 import messageService from '../services/message.service';
-import { StreamingCard } from '../services/streaming-card';
-import config from '../config';
-
-interface Session {
-  chatId: string;
-  sessionId: string;
-  cwd: string;
-  bridge: CLIBridge;
-  launcher: CLILauncher;
-}
+import { Agent } from './agent';
 
 export class SessionManager {
-  private sessions = new Map<string, Session>(); // chatId -> active Session
-  private streamingCards = new Map<string, StreamingCard>(); // chatId -> active StreamingCard
-  private pendingCallbacks = new Map<string, () => void>(); // chatId -> onDone callback
+  private agents = new Map<string, Agent>(); // chatId -> Agent
 
   constructor() {
     // 不再需要 defaultCwd，由 chatManager 管理
@@ -33,13 +19,9 @@ export class SessionManager {
     return chatManager.getCwd(chatId);
   }
 
-  async sendMessage(chatId: string, text: string, onDone?: () => void): Promise<void> {
-    const cwd = this.getCwd(chatId);
-    const session = this.getOrCreateSession(chatId, cwd);
-    if (onDone) {
-      this.pendingCallbacks.set(chatId, onDone);
-    }
-    session.bridge.sendUserMessage(text);
+  async sendMessage(chatId: string, text: string): Promise<void> {
+    const agent = this.getOrCreateAgent(chatId);
+    await agent.sendMessage(text);
   }
 
   /**
@@ -47,26 +29,19 @@ export class SessionManager {
    * @returns 'success' | 'no_session' | 'not_running'
    */
   interruptSession(chatId: string): 'success' | 'no_session' | 'not_running' {
-    const session = this.sessions.get(chatId);
-    if (!session) {
-      logger.warn('[SessionManager] Session not found, cannot interrupt', { chatId });
+    const agent = this.agents.get(chatId);
+    if (!agent) {
+      logger.warn('[SessionManager] Agent not found, cannot interrupt', { chatId });
       return 'no_session';
     }
 
-    if (!session.bridge.canInterrupt()) {
-      logger.warn('[SessionManager] AI not running, cannot interrupt', {
-        chatId,
-        cliSessionId: session.sessionId,
-      });
-      return 'not_running';
-    }
-
-    const success = session.bridge.sendInterrupt();
+    const success = agent.interrupt();
     if (success) {
       logger.info('[SessionManager] Session interrupted', {
         chatId,
-        cliSessionId: session.sessionId,
-        cwd: session.cwd,
+        agentId: agent.getAgentId(),
+        sessionId: agent.getSessionId(),
+        cwd: agent.getCwd(),
       });
       return 'success';
     }
