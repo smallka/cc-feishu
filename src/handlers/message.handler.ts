@@ -173,24 +173,22 @@ async function handleMessageInternal(data: MessageEvent, startTime: number): Pro
     return;
   }
 
-  if (text === '/cd') {
-    const cwds = sessionManager?.listCwds(chatId) ?? [];
-    if (cwds.length === 0) {
-      await messageService.sendTextMessage(chatId, `当前没有已记录的工作目录。\n用法: /cd <路径>`);
-    } else {
-      const currentCwd = sessionManager?.getCwd(chatId);
-      const list = cwds.map(c => c === currentCwd ? `👉 ${c}` : `   ${c}`).join('\n');
-      await messageService.sendTextMessage(chatId, `已记录的工作目录:\n${list}\n\n用 /cd <路径> 切换`);
-    }
-    return;
-  }
+  if (text === '/cd' || text.startsWith('/cd ')) {
+    const input = text.slice(3).trim();
 
-  if (text.startsWith('/cd ')) {
-    const input = text.slice(4).trim();
+    // 无参数时回到默认目录
     if (!input) {
-      await messageService.sendTextMessage(chatId, '用法: /cd <路径>');
+      const defaultCwd = config.claude.workRoot;
+      if (!sessionManager) {
+        await messageService.sendTextMessage(chatId, 'Claude Code 服务未就绪，请稍后再试。');
+        return;
+      }
+      await sessionManager.switchCwd(chatId, defaultCwd);
+      await messageService.sendTextMessage(chatId, `已切换到默认工作目录:\n${defaultCwd}`);
       return;
     }
+
+    // 有参数时切换到指定目录
     const target = resolveWorkPath(input);
     if (!target) {
       await messageService.sendTextMessage(chatId, `目录不存在: ${input}`);
