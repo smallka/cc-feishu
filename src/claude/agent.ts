@@ -26,6 +26,7 @@ export class Agent {
       sessionId: this.sessionId,
       cwd,
       isResume: !!resumeSessionId,
+      operation: 'create'
     });
 
     // 创建 launcher 和 bridge
@@ -46,12 +47,17 @@ export class Agent {
 
     // 监听进程退出
     this.launcher.onExit((code) => {
+      logger.info('[Agent] CLI process exited', {
+        agentId: this.agentId,
+        sessionId: this.sessionId,
+        code,
+        wasDestroyed: this.destroyed
+      });
+
       if (this.destroyed) {
-        // 主动销毁，不触发 onError
         return;
       }
 
-      // 异常退出
       const error = new Error(`CLI process exited unexpectedly with code ${code}`);
       this.destroy(error).catch(() => {});
     });
@@ -82,6 +88,7 @@ export class Agent {
       agentId: this.agentId,
       sessionId: this.sessionId,
       messageLength: text.length,
+      operation: 'send'
     });
 
     try {
@@ -106,6 +113,7 @@ export class Agent {
     logger.info('[Agent] Interrupting', {
       agentId: this.agentId,
       sessionId: this.sessionId,
+      operation: 'interrupt'
     });
 
     return this.bridge.sendInterrupt();

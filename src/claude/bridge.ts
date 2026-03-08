@@ -150,7 +150,7 @@ export class CLIBridge {
 
       case 'system':
         if ('subtype' in msg && msg.subtype === 'init') {
-          logger.info('CLI session initialized', {
+          logger.info('[CLIBridge] CLI session initialized', {
             sessionId: this.sessionId,
             model: msg.model,
           });
@@ -210,7 +210,7 @@ export class CLIBridge {
         },
       },
     });
-    logger.debug('Auto-approving tool', {
+    logger.debug('[CLIBridge] Auto-approving tool', {
       tool: msg.request.tool_name,
       sessionId: this.sessionId,
     });
