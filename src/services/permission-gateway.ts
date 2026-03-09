@@ -41,17 +41,32 @@ export class PendingPermissions {
 
   /**
    * 解析权限请求（用户批准/拒绝）
+   * 支持短 ID（前缀匹配）
    */
-  resolve(requestId: string, result: PermissionResult): boolean {
-    const entry = this.pending.get(requestId);
+  resolve(requestIdOrShort: string, result: PermissionResult): boolean {
+    // 先尝试精确匹配
+    let entry = this.pending.get(requestIdOrShort);
+    let fullRequestId = requestIdOrShort;
+
+    // 如果没找到，尝试前缀匹配
     if (!entry) {
-      logger.warn('[PendingPermissions] Unknown request', { requestId });
+      for (const [id, e] of this.pending) {
+        if (id.startsWith(requestIdOrShort)) {
+          entry = e;
+          fullRequestId = id;
+          break;
+        }
+      }
+    }
+
+    if (!entry) {
+      logger.warn('[PendingPermissions] Unknown request', { requestId: requestIdOrShort });
       return false;
     }
 
     clearTimeout(entry.timer);
     entry.resolve(result);
-    this.pending.delete(requestId);
+    this.pending.delete(fullRequestId);
     return true;
   }
 

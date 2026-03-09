@@ -94,10 +94,49 @@ class MessageService {
   // 发送权限请求消息
   async sendPermissionRequest(chatId: string, request: PermissionRequest): Promise<void> {
     const inputStr = JSON.stringify(request.input, null, 2);
-    const text = `🔐 **权限请求**\n\nClaude 想要执行：**${request.toolName}**\n\`\`\`json\n${inputStr}\n\`\`\`\n\n回复：\n\`/approve ${request.requestId}\` - 批准\n\`/deny ${request.requestId}\` - 拒绝`;
+    const shortId = request.requestId.slice(0, 8);
 
-    await this.sendTextMessage(chatId, text);
-    logger.info('Permission request sent', { chatId, requestId: request.requestId, toolName: request.toolName });
+    const card = {
+      config: { wide_screen_mode: true },
+      header: {
+        title: { tag: 'plain_text', content: '🔐 权限请求' },
+        template: 'orange',
+      },
+      elements: [
+        {
+          tag: 'div',
+          text: { tag: 'lark_md', content: `**工具：** ${request.toolName}` },
+        },
+        {
+          tag: 'markdown',
+          content: `\`\`\`json\n${inputStr}\n\`\`\``,
+        },
+        { tag: 'hr' },
+        {
+          tag: 'div',
+          text: {
+            tag: 'lark_md',
+            content: `回复：\n\`/approve ${shortId}\` - 批准\n\`/deny ${shortId}\` - 拒绝`,
+          },
+        },
+      ],
+    };
+
+    try {
+      const client = feishuClient.getClient();
+      await client.im.message.create({
+        params: { receive_id_type: 'chat_id' },
+        data: {
+          receive_id: chatId,
+          msg_type: 'interactive',
+          content: JSON.stringify(card),
+        },
+      });
+      logger.info('Permission request sent', { chatId, requestId: request.requestId, shortId, toolName: request.toolName });
+    } catch (error) {
+      logger.error('Failed to send permission request', { chatId, error });
+      throw error;
+    }
   }
 }
 
