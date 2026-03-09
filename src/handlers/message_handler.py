@@ -60,7 +60,7 @@ async def handle_message(data):
     start_time = time.time()
 
     # 处理飞书 SDK 的数据结构
-    # data 是 P2ImMessageReceiveV1Data 对象
+    # data 是 P2ImMessageReceiveV1 对象
     if hasattr(data, 'event'):
         event = data.event
         message = {

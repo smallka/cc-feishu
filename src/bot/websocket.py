@@ -1,7 +1,6 @@
 """WebSocket 连接管理"""
 import lark_oapi as lark
-from lark_oapi.api.im.v1 import *
-from lark_oapi.event.dispatcher_handler import EventDispatcherHandler
+from lark_oapi.api.im.v1 import P2ImMessageReceiveV1
 import logging
 import asyncio
 import sys
@@ -20,21 +19,20 @@ class WebSocketManager:
         self.ws_thread = None
         self.event_loop = None
 
-    async def start(self, event_handler: Callable[[P2ImMessageReceiveV1Data], Awaitable[None]]):
+    async def start(self, event_handler: Callable[[P2ImMessageReceiveV1], Awaitable[None]]):
         """启动 WebSocket 连接"""
         try:
             # 保存当前事件循环
             self.event_loop = asyncio.get_event_loop()
 
             # 创建事件处理器（使用同步包装）
-            def sync_handler(data: P2ImMessageReceiveV1Data):
+            def sync_handler(data: P2ImMessageReceiveV1):
                 """同步包装器，将异步处理器调度到主事件循环"""
                 try:
-                    logger.debug('Received WebSocket event', extra={
+                    logger.info('Received WebSocket event', extra={
                         'event_type': type(data.event).__name__ if hasattr(data, 'event') else 'unknown'
                     })
                     # 在主事件循环中调度异步任务
-                    # 传递整个 data 对象，而不是 data.event
                     asyncio.run_coroutine_threadsafe(
                         event_handler(data),
                         self.event_loop
@@ -42,7 +40,8 @@ class WebSocketManager:
                 except Exception as e:
                     logger.error('Error scheduling event handler', extra={'error': str(e)})
 
-            handler = EventDispatcherHandler.builder("", "") \
+            # 使用 lark.EventDispatcherHandler 而不是直接导入
+            handler = lark.EventDispatcherHandler.builder("", "") \
                 .register_p2_im_message_receive_v1(sync_handler) \
                 .build()
 
