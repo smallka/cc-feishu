@@ -2,20 +2,20 @@
 import asyncio
 import time
 import logging
-from typing import Optional
+from typing import Optional, Callable, Awaitable
 
-from claude_agent_sdk import ClaudeSDKClient, ClaudeAgentOptions
+from claude_agent_sdk import ClaudeSDKClient, ClaudeAgentOptions, AssistantMessage, ResultMessage, TextBlock
 
 logger = logging.getLogger(__name__)
 
 _agent_counter = 0
 
 
-def next_agent_id() -> str:
+def next_agent_id(chat_id: str) -> str:
     """生成唯一的 agent ID"""
     global _agent_counter
     _agent_counter += 1
-    return f"agent{_agent_counter}"
+    return f"agent{_agent_counter}_{chat_id}"
 
 
 class Agent:
@@ -30,12 +30,13 @@ class Agent:
             cwd: 工作目录
             resume_session_id: 要恢复的 session ID（可选）
         """
-        self.agent_id = next_agent_id()
+        self.agent_id = next_agent_id(chat_id)
         self.chat_id = chat_id
         self.cwd = cwd
         self.session_id = resume_session_id
         self.start_time = time.time()
         self._connected = False
+        self._is_busy = False  # 是否正在处理消息
 
         # 创建 SDK 客户端
         from src.config import config
@@ -49,7 +50,6 @@ class Agent:
 
         logger.info('Agent created', extra={
             'agent_id': self.agent_id,
-            'chat_id': chat_id,
             'cwd': cwd,
             'resume_session_id': resume_session_id,
         })
@@ -78,6 +78,94 @@ class Agent:
                 # 恢复环境变量
                 if original_claudecode is not None:
                     os.environ['CLAUDECODE'] = original_claudecode
+
+    def is_busy(self) -> bool:
+        """检查是否正在处理消息"""
+        return self._is_busy
+
+    async def send_message(
+        self,
+        text: str,
+        on_response: Callable[[str], Awaitable[None]]
+    ):
+        """
+        发送消息并通过回调返回响应
+
+        Args:
+            text: 消息内容
+            on_response: 响应回调函数，接收响应文本
+
+        Raises:
+            RuntimeError: 如果正在处理其他消息
+        """
+        # 检查是否正在处理
+        if self._is_busy:
+            raise RuntimeError('Agent 正在处理消息，请稍候')
+
+        # 标记为忙碌
+        self._is_busy = True
+
+        try:
+            await self.ensure_connected()
+
+            response_parts = []
+
+            logger.info('Sending message to CLI', extra={
+                'agent_id': self.agent_id,
+                'text_length': len(text)
+            })
+
+            try:
+                await self.client.query(text)
+                async for msg in self.client.receive_response():
+                    if isinstance(msg, AssistantMessage):
+                        for block in msg.content:
+                            if isinstance(block, TextBlock):
+                                response_parts.append(block.text)
+
+                    elif isinstance(msg, ResultMessage):
+                        if msg.session_id:
+                            self.session_id = msg.session_id
+                            logger.info('Session ID updated', extra={
+                                'agent_id': self.agent_id,
+                                'session_id': msg.session_id
+                            })
+
+            except asyncio.CancelledError:
+                logger.info('Message processing cancelled', extra={
+                    'agent_id': self.agent_id
+                })
+                raise
+
+            # 调用回调
+            full_response = ''.join(response_parts)
+            if full_response.strip():
+                logger.info('Invoking response callback', extra={
+                    'agent_id': self.agent_id,
+                    'response_length': len(full_response)
+                })
+                await on_response(full_response)
+            else:
+                logger.warning('Empty response from CLI', extra={
+                    'agent_id': self.agent_id
+                })
+
+        finally:
+            # 无论成功失败，都清除忙碌标记
+            self._is_busy = False
+            logger.debug('Agent no longer busy', extra={'agent_id': self.agent_id})
+
+    async def interrupt(self):
+        """中断当前操作（立即执行，不等锁）"""
+        logger.info('Interrupt requested', extra={'agent_id': self.agent_id})
+        try:
+            await self.client.interrupt()
+        except Exception as e:
+            logger.error('Error sending interrupt', extra={
+                'agent_id': self.agent_id,
+                'error': str(e)
+            })
+            raise
 
     async def destroy(self):
         """销毁 Agent（尽力优雅关闭）"""

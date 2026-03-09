@@ -1,10 +1,9 @@
 """ChatManager：管理 Chat → Agent 映射"""
-from typing import Dict, Optional, Callable
+from typing import Dict, Optional, Callable, Awaitable
 import asyncio
 import time
 import logging
 from src.claude.agent import Agent
-from claude_agent_sdk import AssistantMessage, ResultMessage, TextBlock
 
 logger = logging.getLogger(__name__)
 
@@ -75,40 +74,39 @@ class ChatManager:
             })
             raise RuntimeError(f'创建 Agent 失败: {e}')
 
-    async def send_message(self, chat_id: str, text: str):
-        """发送消息并等待响应（会阻塞）"""
+    async def send_message(
+        self,
+        chat_id: str,
+        text: str,
+        on_response: Callable[[str], Awaitable[None]]
+    ):
+        """
+        发送消息并通过回调返回响应
+
+        Args:
+            chat_id: 会话 ID
+            text: 消息内容
+            on_response: 响应回调函数，接收响应文本
+        """
         agent = self.get_or_create_agent(chat_id)
 
         try:
-            await agent.ensure_connected()
-            await agent.client.query(text)
+            # 调用 agent，锁由 agent 自己管理
+            await agent.send_message(text, on_response)
 
-            collected_text = []
-            async for msg in agent.client.receive_response():
-                if isinstance(msg, AssistantMessage):
-                    for block in msg.content:
-                        if isinstance(block, TextBlock):
-                            collected_text.append(block.text)
+            # 更新 chat 数据中的 session_id
+            if agent.session_id:
+                if chat_id not in self.chats:
+                    self.chats[chat_id] = {}
+                self.chats[chat_id]['session_id'] = agent.session_id
+                self.chats[chat_id]['cwd'] = agent.cwd
 
-                elif isinstance(msg, ResultMessage):
-                    # 更新 session_id
-                    agent.session_id = msg.session_id
-                    if chat_id not in self.chats:
-                        self.chats[chat_id] = {}
-                    self.chats[chat_id]['session_id'] = msg.session_id
-                    self.chats[chat_id]['cwd'] = agent.cwd
-
-                    # 发送完整响应
-                    full_text = ''.join(collected_text)
-                    await self._send_response(chat_id, full_text)
-
-                    # 触发回调
-                    if self.response_complete_callback:
-                        self.response_complete_callback()
-                    break
+            # 触发回调
+            if self.response_complete_callback:
+                self.response_complete_callback()
 
         except ConnectionError as e:
-            await self._send_response(chat_id, f'❌ {e}\n提示：使用 /new 重置会话')
+            await on_response(f'❌ {e}\n提示：使用 /new 重置会话')
             raise
 
         except asyncio.CancelledError:
@@ -129,7 +127,7 @@ class ChatManager:
             return 'no_session'
 
         try:
-            await asyncio.wait_for(agent.client.interrupt(), timeout=3.0)
+            await asyncio.wait_for(agent.interrupt(), timeout=3.0)
             return 'success'
         except asyncio.TimeoutError:
             logger.warning('Interrupt timeout', extra={'chat_id': chat_id})
@@ -247,38 +245,6 @@ class ChatManager:
             )
 
         return '\n'.join(info)
-
-    async def _send_response(self, chat_id: str, text: str):
-        """发送响应到飞书"""
-        from src.services.message_service import message_service
-
-        if not text.strip():
-            logger.warning('Empty response, skipping', extra={'chat_id': chat_id})
-            return
-
-        logger.info('Sending response', extra={
-            'chat_id': chat_id,
-            'text_length': len(text)
-        })
-
-        try:
-            # 优先使用卡片消息（支持 Markdown）
-            await message_service.send_card_message(chat_id, text)
-            logger.info('Response sent successfully', extra={'chat_id': chat_id})
-        except Exception as e:
-            logger.error('Failed to send card message', extra={
-                'chat_id': chat_id,
-                'error': str(e)
-            })
-            # 降级到纯文本
-            try:
-                await message_service.send_text_message(chat_id, text)
-                logger.warning('Fallback to text message', extra={'chat_id': chat_id})
-            except Exception as e2:
-                logger.error('Failed to send fallback text message', extra={
-                    'chat_id': chat_id,
-                    'error': str(e2)
-                })
 
 
 # 单例

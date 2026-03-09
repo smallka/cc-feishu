@@ -11,14 +11,14 @@ logger = logging.getLogger(__name__)
 class MessageService:
     """消息发送服务"""
 
-    async def add_reaction(self, message_id: str, emoji_type: str) -> str | None:
+    def add_reaction(self, message_id: str, emoji_type: str) -> str | None:
         """添加消息表情反应"""
         try:
             client = feishu_client.get_client()
             request = CreateMessageReactionRequest.builder() \
                 .message_id(message_id) \
                 .request_body(CreateMessageReactionRequestBody.builder()
-                    .reaction_type(ReactionType.builder()
+                    .reaction_type(Emoji.builder()
                         .emoji_type(emoji_type)
                         .build())
                     .build()) \
@@ -27,7 +27,7 @@ class MessageService:
             response = client.im.v1.message_reaction.create(request)
 
             if not response.success():
-                logger.warning('Failed to add reaction', extra={
+                logger.warning(f'Failed to add reaction: code={response.code}, msg={response.msg}', extra={
                     'message_id': message_id,
                     'code': response.code,
                     'msg': response.msg
@@ -37,13 +37,14 @@ class MessageService:
             return response.data.reaction_id
 
         except Exception as e:
-            logger.warning('Failed to add reaction', extra={
+            logger.warning(f'Failed to add reaction: {str(e)}', extra={
                 'message_id': message_id,
-                'error': str(e)
+                'error': str(e),
+                'error_type': type(e).__name__
             })
             return None
 
-    async def remove_reaction(self, message_id: str, reaction_id: str):
+    def remove_reaction(self, message_id: str, reaction_id: str):
         """移除消息表情反应"""
         try:
             client = feishu_client.get_client()
