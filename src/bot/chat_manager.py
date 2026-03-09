@@ -252,19 +252,33 @@ class ChatManager:
         """发送响应到飞书"""
         from src.services.message_service import message_service
 
+        if not text.strip():
+            logger.warning('Empty response, skipping', extra={'chat_id': chat_id})
+            return
+
         logger.info('Sending response', extra={
             'chat_id': chat_id,
             'text_length': len(text)
         })
 
         try:
-            await message_service.send_text_message(chat_id, text)
+            # 优先使用卡片消息（支持 Markdown）
+            await message_service.send_card_message(chat_id, text)
             logger.info('Response sent successfully', extra={'chat_id': chat_id})
         except Exception as e:
-            logger.error('Failed to send response', extra={
+            logger.error('Failed to send card message', extra={
                 'chat_id': chat_id,
                 'error': str(e)
             })
+            # 降级到纯文本
+            try:
+                await message_service.send_text_message(chat_id, text)
+                logger.warning('Fallback to text message', extra={'chat_id': chat_id})
+            except Exception as e2:
+                logger.error('Failed to send fallback text message', extra={
+                    'chat_id': chat_id,
+                    'error': str(e2)
+                })
 
 
 # 单例
