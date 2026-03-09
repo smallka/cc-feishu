@@ -75,5 +75,10 @@ async def main():
 
 
 if __name__ == '__main__':
-    setup_logger(level=config.log_level)
+    # 配置根 logger，这样所有子 logger 都会继承配置
+    logging.basicConfig(
+        level=getattr(logging, config.log_level.upper()),
+        format='%(asctime)s [%(levelname)s] %(name)s: %(message)s',
+        handlers=[logging.StreamHandler(sys.stdout)]
+    )
     asyncio.run(main())
