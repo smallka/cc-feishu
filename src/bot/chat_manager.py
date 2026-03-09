@@ -249,12 +249,22 @@ class ChatManager:
         return '\n'.join(info)
 
     async def _send_response(self, chat_id: str, text: str):
-        """发送响应到飞书（占位符，后续实现）"""
+        """发送响应到飞书"""
+        from src.services.message_service import message_service
+
         logger.info('Sending response', extra={
             'chat_id': chat_id,
             'text_length': len(text)
         })
-        # 后续会调用 message_service.send_card_message()
+
+        try:
+            await message_service.send_text_message(chat_id, text)
+            logger.info('Response sent successfully', extra={'chat_id': chat_id})
+        except Exception as e:
+            logger.error('Failed to send response', extra={
+                'chat_id': chat_id,
+                'error': str(e)
+            })
 
 
 # 单例
