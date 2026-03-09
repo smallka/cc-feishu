@@ -30,9 +30,13 @@ class WebSocketManager:
             def sync_handler(data: P2ImMessageReceiveV1Data):
                 """同步包装器，将异步处理器调度到主事件循环"""
                 try:
+                    logger.debug('Received WebSocket event', extra={
+                        'event_type': type(data.event).__name__ if hasattr(data, 'event') else 'unknown'
+                    })
                     # 在主事件循环中调度异步任务
+                    # 传递整个 data 对象，而不是 data.event
                     asyncio.run_coroutine_threadsafe(
-                        event_handler(data.event),
+                        event_handler(data),
                         self.event_loop
                     )
                 except Exception as e:

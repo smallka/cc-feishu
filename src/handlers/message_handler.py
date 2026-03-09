@@ -55,10 +55,26 @@ def resolve_work_path(input_path: str) -> str | None:
     return str(target.resolve())
 
 
-async def handle_message(data: dict):
+async def handle_message(data):
     """处理飞书消息（外层超时保护）"""
     start_time = time.time()
-    message = data.get('message', {})
+
+    # 处理飞书 SDK 的数据结构
+    # data 是 P2ImMessageReceiveV1Data 对象
+    if hasattr(data, 'event'):
+        event = data.event
+        message = {
+            'message_id': event.message.message_id,
+            'chat_id': event.message.chat_id,
+            'message_type': event.message.message_type,
+            'content': event.message.content,
+        }
+        data_dict = {'message': message}
+    else:
+        # 兼容测试数据
+        data_dict = data
+        message = data_dict.get('message', {})
+
     message_id = message.get('message_id', '')
     chat_id = message.get('chat_id', '')
 
@@ -75,7 +91,7 @@ async def handle_message(data: dict):
     try:
         timeout = config.message_timeout / 1000  # 转换为秒
         await asyncio.wait_for(
-            handle_message_internal(data, start_time),
+            handle_message_internal(data_dict, start_time),
             timeout=timeout
         )
 
