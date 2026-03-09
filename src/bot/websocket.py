@@ -1,6 +1,5 @@
 """WebSocket 连接管理"""
 import lark_oapi as lark
-from lark_oapi.api.im.v1 import P2ImMessageReceiveV1
 import logging
 import asyncio
 import sys
@@ -19,14 +18,14 @@ class WebSocketManager:
         self.ws_thread = None
         self.event_loop = None
 
-    async def start(self, event_handler: Callable[[P2ImMessageReceiveV1], Awaitable[None]]):
+    async def start(self, event_handler: Callable[[lark.im.v1.P2ImMessageReceiveV1], Awaitable[None]]):
         """启动 WebSocket 连接"""
         try:
             # 保存当前事件循环
             self.event_loop = asyncio.get_event_loop()
 
             # 创建事件处理器（使用同步包装）
-            def sync_handler(data: P2ImMessageReceiveV1):
+            def sync_handler(data: lark.im.v1.P2ImMessageReceiveV1):
                 """同步包装器，将异步处理器调度到主事件循环"""
                 try:
                     logger.info('Received WebSocket event', extra={
