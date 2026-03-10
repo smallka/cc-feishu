@@ -76,6 +76,8 @@ LOG_LEVEL=INFO
 
 ### 4. 启动机器人
 
+#### 手动启动
+
 ```bash
 python -m src.main
 ```
@@ -91,6 +93,54 @@ INFO - [WebSocket] Connected successfully
 
 在飞书群组中发送消息，机器人应该响应。
 
+#### Windows 自动重启配置
+
+**方案一：NSSM（推荐）**
+
+1. 下载 [NSSM](https://nssm.cc/download) 并解压到 `C:\tools\nssm`
+
+2. 安装服务：
+```bash
+# 使用 GUI 配置
+nssm install FeishuBot
+
+# 或使用命令行
+nssm install FeishuBot "C:\Python310\python.exe" "scripts\start_service.bat"
+nssm set FeishuBot AppDirectory "C:\work\cc-feishu"
+nssm set FeishuBot AppStdout "C:\work\cc-feishu\logs\service.log"
+nssm set FeishuBot AppStderr "C:\work\cc-feishu\logs\service_error.log"
+nssm set FeishuBot AppExit Default Restart
+nssm set FeishuBot AppRestartDelay 5000
+```
+
+3. 启动服务：
+```bash
+nssm start FeishuBot
+```
+
+**方案二：任务计划程序**
+
+1. 打开任务计划程序：`Win + R` → `taskschd.msc`
+
+2. 创建基本任务：
+   - 名称：`FeishuBot`
+   - 触发器：当计算机启动时
+   - 操作：启动程序
+   - 程序/脚本：`C:\work\cc-feishu\scripts\start_service.bat`
+   - 起始于：`C:\work\cc-feishu`
+
+3. 配置属性（右键任务 → 属性）：
+   - 常规：☑ 不管用户是否登录都要运行
+   - 设置：☑ 如果任务失败，重新启动间隔：5 分钟
+
+**启动脚本说明**
+
+`scripts/start_service.bat` 和 `scripts/start_service.py` 提供以下功能：
+- 自动检测并关闭旧进程（避免重复启动）
+- 使用互斥锁确保单实例运行
+- 进程崩溃时自动重启（配合 NSSM/任务计划程序）
+- 记录启动/停止日志
+
 ## 环境变量说明
 
 | 变量 | 说明 | 默认值 |
@@ -101,6 +151,14 @@ INFO - [WebSocket] Connected successfully
 | `CLAUDE_MODEL` | Claude 模型 | `claude-opus-4-6` |
 | `MESSAGE_TIMEOUT` | 消息处理超时（毫秒） | `300000` |
 | `LOG_LEVEL` | 日志级别 | `INFO` |
+
+## 依赖说明
+
+核心依赖：
+- `claude-agent-sdk` - Claude Code CLI 官方 SDK
+- `lark-oapi` - 飞书 Python SDK
+- `python-dotenv` - 环境变量管理
+- `psutil` - 进程管理（用于启动脚本去重）
 
 ## 日志级别
 
