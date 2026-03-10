@@ -23,16 +23,16 @@ async def test_get_or_create_agent():
     await manager.start()
 
     # 创建第一个 Agent
-    agent1 = manager.get_or_create_agent('chat1')
+    agent1, expected_session1 = manager.get_or_create_agent('chat1')
     assert agent1.chat_id == 'chat1'
     assert len(manager.agents) == 1
 
     # 再次获取，应该返回同一个
-    agent2 = manager.get_or_create_agent('chat1')
+    agent2, expected_session2 = manager.get_or_create_agent('chat1')
     assert agent1 is agent2
 
     # 创建第二个 Agent
-    agent3 = manager.get_or_create_agent('chat2')
+    agent3, expected_session3 = manager.get_or_create_agent('chat2')
     assert agent3.chat_id == 'chat2'
     assert len(manager.agents) == 2
 
@@ -46,7 +46,7 @@ async def test_reset():
     await manager.start()
 
     # 创建 Agent
-    agent = manager.get_or_create_agent('chat1')
+    agent, _ = manager.get_or_create_agent('chat1')
     assert 'chat1' in manager.agents
 
     # 重置
@@ -65,7 +65,7 @@ async def test_switch_cwd():
     await manager.start()
 
     # 创建 Agent
-    agent = manager.get_or_create_agent('chat1')
+    agent, _ = manager.get_or_create_agent('chat1')
     original_cwd = agent.cwd
 
     # 切换目录
@@ -89,9 +89,9 @@ async def test_get_session_info():
     assert '没有活跃的会话' in info
 
     # 创建 Agent 后
-    agent = manager.get_or_create_agent('chat1')
+    agent, _ = manager.get_or_create_agent('chat1')
     info = manager.get_session_info('chat1')
-    assert 'Session ID' in info
+    assert 'Session ID' in info or '无' in info  # session_id 可能为 None
     assert '工作目录' in info
     assert '运行时长' in info
 

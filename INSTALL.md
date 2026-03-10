@@ -76,21 +76,20 @@ LOG_LEVEL=INFO
 
 ### 4. 启动机器人
 
-开发模式：
-
 ```bash
 python -m src.main
 ```
 
-生产模式（使用进程管理器，见下文）：
+启动后应看到类似日志：
 
-```bash
-# systemd
-sudo systemctl start feishu-bot
-
-# supervisor
-sudo supervisorctl start feishu-bot
 ```
+INFO - Application starting
+INFO - [ChatManager] Started
+INFO - [WebSocket] Connecting to Feishu WebSocket
+INFO - [WebSocket] Connected successfully
+```
+
+在飞书群组中发送消息，机器人应该响应。
 
 ## 环境变量说明
 
@@ -103,81 +102,14 @@ sudo supervisorctl start feishu-bot
 | `MESSAGE_TIMEOUT` | 消息处理超时（毫秒） | `300000` |
 | `LOG_LEVEL` | 日志级别 | `INFO` |
 
-## 部署配置
+## 日志级别
 
-### 使用 systemd（推荐）
+通过 `LOG_LEVEL` 环境变量配置：
 
-创建服务文件 `/etc/systemd/system/feishu-bot.service`：
-
-```ini
-[Unit]
-Description=Feishu Bot with Claude Code
-After=network.target
-
-[Service]
-Type=simple
-User=your-user
-WorkingDirectory=/path/to/cc-feishu
-Environment="PATH=/usr/local/bin:/usr/bin:/bin"
-ExecStart=/usr/bin/python3 -m src.main
-Restart=always
-RestartSec=10
-StandardOutput=journal
-StandardError=journal
-
-[Install]
-WantedBy=multi-user.target
-```
-
-启动服务：
-
-```bash
-sudo systemctl daemon-reload
-sudo systemctl enable feishu-bot
-sudo systemctl start feishu-bot
-
-# 查看状态
-sudo systemctl status feishu-bot
-
-# 查看日志
-sudo journalctl -u feishu-bot -f
-```
-
-### 使用 supervisor
-
-创建配置文件 `/etc/supervisor/conf.d/feishu-bot.conf`：
-
-```ini
-[program:feishu-bot]
-command=/usr/bin/python3 -m src.main
-directory=/path/to/cc-feishu
-user=your-user
-autostart=true
-autorestart=true
-redirect_stderr=true
-stdout_logfile=/var/log/feishu-bot.log
-stdout_logfile_maxbytes=10MB
-stdout_logfile_backups=10
-environment=PATH="/usr/local/bin:/usr/bin:/bin"
-```
-
-启动服务：
-
-```bash
-sudo supervisorctl reread
-sudo supervisorctl update
-sudo supervisorctl start feishu-bot
-
-# 查看状态
-sudo supervisorctl status feishu-bot
-
-# 查看日志
-sudo supervisorctl tail -f feishu-bot
-```
-
-### 重启策略说明
-
-**重要**：当 WebSocket 连接断开时，应用会主动退出（exit code 1），依赖外部进程管理器（systemd/supervisor）自动重启。这是设计行为，确保连接问题能够快速恢复。
+- `ERROR` - 仅错误
+- `WARNING` - 警告和错误
+- `INFO` - 信息、警告和错误（默认）
+- `DEBUG` - 调试信息
 
 ## 常见问题
 
@@ -216,24 +148,3 @@ sudo supervisorctl tail -f feishu-bot
 2. 是否有网络连接
 3. 尝试使用国内镜像：`pip install -e . -i https://pypi.tuna.tsinghua.edu.cn/simple`
 
-## 日志级别
-
-通过 `LOG_LEVEL` 环境变量配置：
-
-- `ERROR` - 仅错误
-- `WARNING` - 警告和错误
-- `INFO` - 信息、警告和错误（默认）
-- `DEBUG` - 调试信息
-
-## 验证安装
-
-启动后应看到类似日志：
-
-```
-INFO - Application starting
-INFO - [ChatManager] Started
-INFO - [WebSocket] Connecting to Feishu WebSocket
-INFO - [WebSocket] Connected successfully
-```
-
-在飞书群组中发送消息，机器人应该响应。

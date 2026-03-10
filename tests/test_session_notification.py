@@ -1,9 +1,11 @@
 """测试 session 变化通知功能"""
+import pytest
 import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 from src.bot.chat_manager import ChatManager
 
 
+@pytest.mark.asyncio
 async def test_session_notification():
     """测试 session 变化通知"""
 
@@ -98,6 +100,3 @@ async def test_session_notification():
 
             print("\n[OK] 所有测试通过！")
 
-
-if __name__ == '__main__':
-    asyncio.run(test_session_notification())
