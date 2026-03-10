@@ -3,6 +3,7 @@ from typing import Dict, Optional, Callable, Awaitable
 import asyncio
 import time
 import logging
+from pathlib import Path
 from src.claude.agent import Agent
 
 logger = logging.getLogger(__name__)
@@ -250,6 +251,234 @@ class ChatManager:
             f'- 工作目录: {cwd}\n'
             f'- 运行时长: {format_duration(uptime)}'
         )
+
+    async def list_sessions(self, chat_id: str) -> str:
+        """列出当前工作目录的所有 sessions（按时间倒序）"""
+        chat_data = self.chats.get(chat_id, {})
+        cwd = chat_data.get('cwd', self.default_cwd)
+        is_root = (cwd == self.default_cwd)
+
+        # 构造 projects 目录路径
+        normalized_path = str(Path(cwd).resolve()).replace(':', '-').replace('\\', '-').replace('/', '-')
+        projects_dir = Path.home() / '.claude' / 'projects' / normalized_path
+
+        if not projects_dir.exists():
+            return f'工作目录: `{cwd}`\n\n暂无 session 记录'
+
+        # 查找所有 .jsonl 文件
+        session_files = list(projects_dir.glob('*.jsonl'))
+
+        if not session_files:
+            return f'工作目录: `{cwd}`\n\n暂无 session 记录'
+
+        # 按修改时间倒序排序
+        session_files.sort(key=lambda f: f.stat().st_mtime, reverse=True)
+
+        import json
+        import datetime
+
+        current_session = chat_data.get('session_id')
+        lines = []
+
+        # 如果在根目录，显示当前目录 5 个 + 其他目录各 1 个
+        if is_root:
+            lines.append(f'**📋 Sessions (根目录)**')
+            lines.append(f'工作目录: `{cwd}`')
+            lines.append('')
+            lines.append('**当前目录最新 5 个:**')
+            lines.append('')
+
+            # 显示当前目录最新 5 个
+            for i, file in enumerate(session_files[:5], 1):
+                session_id = file.stem
+                mtime = file.stat().st_mtime
+                time_str = datetime.datetime.fromtimestamp(mtime).strftime('%m-%d %H:%M')
+
+                # 读取第一条用户消息
+                first_message = self._read_first_message(file, session_id)
+
+                marker = ' 🔵' if session_id == current_session else ''
+                lines.append(f'**{i}.** `{session_id[:8]}...`{marker}  ⏰ {time_str}')
+                lines.append(f'💬 {first_message}')
+                lines.append('')
+
+            # 查找其他子目录
+            projects_root = Path.home() / '.claude' / 'projects'
+            subdirs = []
+
+            for subdir in projects_root.iterdir():
+                if subdir.is_dir() and subdir != projects_dir and 'Temp' not in subdir.name:
+                    # 查找该目录最新的 session
+                    sub_sessions = list(subdir.glob('*.jsonl'))
+                    if sub_sessions:
+                        sub_sessions.sort(key=lambda f: f.stat().st_mtime, reverse=True)
+                        subdirs.append((subdir, sub_sessions[0]))
+
+            # 按最新 session 时间排序，取前 5 个
+            subdirs.sort(key=lambda x: x[1].stat().st_mtime, reverse=True)
+            subdirs = subdirs[:5]
+
+            if subdirs:
+                lines.append('**其他目录最新:**')
+                lines.append('')
+
+                for i, (subdir, latest_file) in enumerate(subdirs, 6):  # 从 6 开始编号
+                    # 解析目录名
+                    dir_name = subdir.name.replace('-', '\\', 1).replace('-', '/')
+                    session_id = latest_file.stem
+                    mtime = latest_file.stat().st_mtime
+                    time_str = datetime.datetime.fromtimestamp(mtime).strftime('%m-%d %H:%M')
+
+                    # 读取第一条用户消息
+                    first_message = self._read_first_message(latest_file, session_id)
+
+                    lines.append(f'**{i}.** `{dir_name}`')
+                    lines.append(f'   `{session_id[:8]}...`  ⏰ {time_str}')
+                    lines.append(f'   💬 {first_message}')
+                    lines.append('')
+
+        else:
+            # 非根目录，只显示本目录最新 5 个
+            lines.append(f'**📋 Sessions ({len(session_files)} 个)**')
+            lines.append(f'工作目录: `{cwd}`')
+            lines.append('')
+
+            for i, file in enumerate(session_files[:5], 1):
+                session_id = file.stem
+                mtime = file.stat().st_mtime
+                time_str = datetime.datetime.fromtimestamp(mtime).strftime('%m-%d %H:%M')
+
+                # 读取第一条用户消息
+                first_message = self._read_first_message(file, session_id)
+
+                marker = ' 🔵' if session_id == current_session else ''
+                lines.append(f'**{i}.** `{session_id[:8]}...`{marker}  ⏰ {time_str}')
+                lines.append(f'💬 {first_message}')
+                lines.append('')
+
+            if len(session_files) > 5:
+                lines.append(f'_还有 {len(session_files) - 5} 个 session 未显示_')
+
+        return '\n'.join(lines)
+
+    def _read_first_message(self, file: Path, session_id: str) -> str:
+        """读取 session 文件的第一条用户消息"""
+        import json
+
+        first_message = '(无消息)'
+        try:
+            with open(file, 'r', encoding='utf-8') as f:
+                for line in f:
+                    try:
+                        entry = json.loads(line)
+                        # Claude Code session 格式：type="user", message.role="user", message.content
+                        if entry.get('type') == 'user' and 'message' in entry:
+                            content = entry['message'].get('content', '')
+                            # 截取前 50 个字符
+                            if len(content) > 50:
+                                first_message = content[:50] + '...'
+                            else:
+                                first_message = content
+                            break
+                    except json.JSONDecodeError:
+                        continue
+        except Exception as e:
+            logger.warning('Failed to read session file', extra={
+                'session_id': session_id,
+                'error': str(e)
+            })
+
+        return first_message
+
+    def _get_session_list(self, chat_id: str) -> list[tuple[str, str]]:
+        """获取 session 列表（用于编号索引）
+
+        Returns:
+            List of (session_id, cwd) tuples
+        """
+        chat_data = self.chats.get(chat_id, {})
+        cwd = chat_data.get('cwd', self.default_cwd)
+        is_root = (cwd == self.default_cwd)
+
+        normalized_path = str(Path(cwd).resolve()).replace(':', '-').replace('\\', '-').replace('/', '-')
+        projects_dir = Path.home() / '.claude' / 'projects' / normalized_path
+
+        sessions = []
+
+        if projects_dir.exists():
+            session_files = list(projects_dir.glob('*.jsonl'))
+            session_files.sort(key=lambda f: f.stat().st_mtime, reverse=True)
+
+            # 当前目录的 sessions
+            for file in session_files[:5]:
+                sessions.append((file.stem, cwd))
+
+            # 如果在根目录，添加其他目录的 sessions
+            if is_root:
+                projects_root = Path.home() / '.claude' / 'projects'
+                subdirs = []
+
+                for subdir in projects_root.iterdir():
+                    if subdir.is_dir() and subdir != projects_dir and 'Temp' not in subdir.name:
+                        sub_sessions = list(subdir.glob('*.jsonl'))
+                        if sub_sessions:
+                            sub_sessions.sort(key=lambda f: f.stat().st_mtime, reverse=True)
+                            subdirs.append((subdir, sub_sessions[0]))
+
+                subdirs.sort(key=lambda x: x[1].stat().st_mtime, reverse=True)
+                subdirs = subdirs[:5]
+
+                for subdir, latest_file in subdirs:
+                    # 解析回原始路径
+                    dir_name = subdir.name.replace('-', ':', 1).replace('-', '\\')
+                    sessions.append((latest_file.stem, dir_name))
+
+        return sessions
+
+    async def resume_session(self, chat_id: str, session_id: str) -> str:
+        """恢复到指定的 session"""
+        chat_data = self.chats.get(chat_id, {})
+        cwd = chat_data.get('cwd', self.default_cwd)
+
+        # 验证 session 是否存在
+        normalized_path = str(Path(cwd).resolve()).replace(':', '-').replace('\\', '-').replace('/', '-')
+        projects_dir = Path.home() / '.claude' / 'projects' / normalized_path
+        session_file = projects_dir / f'{session_id}.jsonl'
+
+        if not session_file.exists():
+            return f'❌ Session 不存在: {session_id}\n使用 /ls 查看可用的 sessions'
+
+        # 销毁当前 Agent
+        agent = self.agents.get(chat_id)
+        if agent:
+            try:
+                await asyncio.wait_for(agent.destroy(), timeout=2.0)
+            except asyncio.TimeoutError:
+                logger.warning('Agent destroy timeout when resuming session', extra={
+                    'chat_id': chat_id
+                })
+            except Exception as e:
+                logger.error('Error destroying agent when resuming session', extra={
+                    'chat_id': chat_id,
+                    'error': str(e)
+                })
+
+            self.agents.pop(chat_id, None)
+
+        # 更新 session_id
+        self.chats[chat_id] = {
+            'cwd': cwd,
+            'session_id': session_id,
+            'session_notified': False
+        }
+
+        logger.info('Resumed session', extra={
+            'chat_id': chat_id,
+            'session_id': session_id,
+            'cwd': cwd
+        })
+
+        return f'✅ 已切换到 session: {session_id}\n工作目录: {cwd}'
 
     def get_debug_info(self) -> str:
         """获取调试信息"""

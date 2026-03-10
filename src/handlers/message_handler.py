@@ -138,7 +138,9 @@ async def handle_message_internal(data: dict, start_time: float):
             '/new — 重置会话',
             '/stop — 打断任务',
             '/stat — 会话状态',
-            '/cd [路径] — 切换目录',
+            '/cd <路径> — 切换目录（/cd . 切换到根目录）',
+            '/resume — 列出 sessions',
+            '/resume <编号|session_id> — 恢复 session',
             '/debug — 系统调试信息',
         ]
         await message_service.send_text_message(chat_id, '\n'.join(help_text))
@@ -188,17 +190,20 @@ async def handle_message_internal(data: dict, start_time: float):
         return
 
     if text == '/cd':
-        default_cwd = config.claude.work_root
-        await chat_manager.switch_cwd(chat_id, default_cwd)
         await message_service.send_text_message(
             chat_id,
-            f'已切换到默认工作目录:\n{default_cwd}'
+            '用法: /cd <路径>\n使用 /cd . 切换到根目录'
         )
         return
 
     if text.startswith('/cd '):
         input_path = text[4:].strip()
-        target = resolve_work_path(input_path)
+
+        # /cd . 切换到根目录
+        if input_path == '.':
+            target = config.claude.work_root
+        else:
+            target = resolve_work_path(input_path)
 
         if not target:
             await message_service.send_text_message(
@@ -208,10 +213,54 @@ async def handle_message_internal(data: dict, start_time: float):
             return
 
         await chat_manager.switch_cwd(chat_id, target)
-        await message_service.send_text_message(
-            chat_id,
-            f'工作目录已切换到: {target}'
-        )
+        result = await chat_manager.list_sessions(chat_id)
+        await message_service.send_card_message(chat_id, result)
+        return
+
+    if text == '/resume':
+        result = await chat_manager.list_sessions(chat_id)
+        await message_service.send_card_message(chat_id, result)
+        return
+
+    if text.startswith('/resume '):
+        input_value = text[8:].strip()
+        if not input_value:
+            result = await chat_manager.list_sessions(chat_id)
+            await message_service.send_card_message(chat_id, result)
+            return
+
+        # 检查是否为数字（编号）
+        if input_value.isdigit():
+            index = int(input_value)
+            if index < 1:
+                await message_service.send_text_message(
+                    chat_id,
+                    '❌ 编号必须大于 0'
+                )
+                return
+
+            # 获取 session 列表
+            sessions = chat_manager._get_session_list(chat_id)
+            if index > len(sessions):
+                await message_service.send_text_message(
+                    chat_id,
+                    f'❌ 编号超出范围（共 {len(sessions)} 个 session）\n使用 /resume 查看可用的 sessions'
+                )
+                return
+
+            session_id, target_cwd = sessions[index - 1]
+
+            # 如果目标目录与当前目录不同，先切换目录
+            current_cwd = chat_manager.chats.get(chat_id, {}).get('cwd', chat_manager.default_cwd)
+            if target_cwd != current_cwd:
+                await chat_manager.switch_cwd(chat_id, target_cwd)
+
+            result = await chat_manager.resume_session(chat_id, session_id)
+        else:
+            # 直接使用 session ID
+            result = await chat_manager.resume_session(chat_id, input_value)
+
+        await message_service.send_text_message(chat_id, result)
         return
 
     # 未知命令拦截

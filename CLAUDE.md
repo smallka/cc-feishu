@@ -35,10 +35,10 @@ src/
 
 ### 职责分工
 
-**MessageHandler** (`src/handlers/message_handler.py`)：
+**message_handler.py**：
 - 消息路由和业务逻辑协调
 - 解析用户消息（命令 vs 普通消息）
-- 处理命令（/help, /new, /stop 等）
+- 处理命令（/help, /new, /stop, /stat, /cd, /resume, /debug 等）
 - 管理 Reaction 生命周期（添加/移除）
 - 处理 Session 变化通知
 
@@ -46,6 +46,7 @@ src/
 - Agent 生命周期管理
 - 管理 chat → agent 映射
 - 创建/销毁/重置 Agent
+- Session 管理（列出/恢复历史 sessions）
 - 不涉及业务逻辑（reaction、通知等）
 
 **Agent** (`src/claude/agent.py`)：
@@ -102,6 +103,8 @@ src/
 - **首次消息**：创建 Agent，在 default_cwd 启动新会话
 - **后续消息**：复用存活的 Agent，或重启并 resume session_id
 - **`/cd` 切换目录**：销毁 Agent，清空 session_id，更新 cwd（下次消息创建新会话）
+- **`/ls` 列出 sessions**：读取 `~/.claude/projects/<cwd>/` 目录下的 `.jsonl` 文件，按时间倒序显示
+- **`/resume` 恢复会话**：销毁当前 Agent，更新 session_id，下次消息时恢复到指定 session
 - **`/new` 重置**：销毁 Agent，删除 ChatData（下次消息在当前 cwd 创建新会话）
 - **Agent 进程死亡**：下次消息时自动清理并重启
 
@@ -120,7 +123,9 @@ src/
 - `/new` - 调用 `ChatManager.reset(chat_id)`，关闭当前 Agent 并创建新的
 - `/stop` - 调用 `ChatManager.interrupt(chat_id)`，中断当前任务
 - `/stat` - 调用 `ChatManager.get_session_info(chat_id)`，返回当前 session ID 和工作目录
-- `/cd [路径]` - 调用 `ChatManager.switch_cwd(chat_id, new_cwd)`，切换工作目录并 resume session
+- `/cd <路径>` - 调用 `ChatManager.switch_cwd(chat_id, new_cwd)`，切换工作目录并显示 sessions（`/cd .` 切换到根目录）
+- `/resume` - 调用 `ChatManager.list_sessions(chat_id)`，列出可用的 sessions
+- `/resume <编号|session_id>` - 调用 `ChatManager.resume_session(chat_id, session_id)`，恢复到指定 session（支持编号索引）
 - `/debug` - 显示系统状态（Agent 数量、内存使用等）
 
 ### 工具权限自动批准
