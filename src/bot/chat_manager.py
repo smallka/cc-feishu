@@ -62,8 +62,53 @@ class ChatManager:
         cwd = chat_data.get('cwd', self.default_cwd)
         session_id = chat_data.get('session_id')
 
+        # 定义响应回调
+        async def on_response(response_text: str):
+            # 检查 session 是否变化（仅首次响应）
+            chat_data = self.chats.get(chat_id, {})
+            if not chat_data.get('session_notified', False):
+                actual_session_id = agent.get_session_id()
+                session_changed = actual_session_id != session_id
+
+                # 生成通知消息
+                notification = None
+                if not session_id:
+                    # 首次创建会话
+                    notification = f'🆕 新会话: {agent.get_cwd()} ({actual_session_id})'
+                elif session_changed:
+                    # 恢复失败
+                    notification = f'⚠️ 恢复失败，已创建新会话: {agent.get_cwd()} ({actual_session_id})'
+
+                # 发送通知
+                if notification:
+                    from src.services.message_service import message_service
+                    try:
+                        await message_service.send_text_message(chat_id, notification)
+                        logger.info('Session change notification sent', extra={
+                            'chat_id': chat_id,
+                            'session_changed': session_changed
+                        })
+                    except Exception as e:
+                        logger.error('Failed to send session notification', extra={
+                            'chat_id': chat_id,
+                            'error': str(e)
+                        })
+
+                # 标记已通知
+                self.chats[chat_id]['session_notified'] = True
+
+            # 发送响应消息
+            from src.services.message_service import message_service
+            try:
+                await message_service.send_text_message(chat_id, response_text)
+            except Exception as e:
+                logger.error('Failed to send response', extra={
+                    'chat_id': chat_id,
+                    'error': str(e)
+                })
+
         try:
-            agent = Agent(chat_id, cwd, session_id)
+            agent = Agent(chat_id, cwd, session_id, on_response)
             self.agents[chat_id] = agent
 
             # 初始化 chat 数据（重置 session_notified）
@@ -84,62 +129,20 @@ class ChatManager:
     async def send_message(
         self,
         chat_id: str,
-        text: str,
-        on_response: Callable[[str], Awaitable[None]]
+        text: str
     ):
         """
-        发送消息并通过回调返回响应
+        发送消息
 
         Args:
             chat_id: 会话 ID
             text: 消息内容
-            on_response: 响应回调函数，接收响应文本
         """
-        agent, expected_session_id = self.get_or_create_agent(chat_id)
-
-        # 包装回调，在首次响应时检查 session 变化
-        async def wrapped_response(response_text: str):
-            # 检查 session 是否变化（仅首次响应）
-            chat_data = self.chats.get(chat_id, {})
-            if not chat_data.get('session_notified', False):
-                actual_session_id = agent.get_session_id()
-                session_changed = actual_session_id != expected_session_id
-
-                # 生成通知消息
-                notification = None
-                if not expected_session_id:
-                    # 首次创建会话
-                    notification = f'🆕 新会话: {agent.get_cwd()} ({actual_session_id})'
-                elif session_changed:
-                    # 恢复失败
-                    notification = f'⚠️ 恢复失败，已创建新会话: {agent.get_cwd()} ({actual_session_id})'
-
-                # 发送通知
-                if notification:
-                    from src.services.message_service import message_service
-                    try:
-                        await message_service.send_text_message(chat_id, notification)
-                        logger.info('Session change notification sent', extra={
-                            'chat_id': chat_id,
-                            'expected': expected_session_id,
-                            'actual': actual_session_id,
-                            'changed': session_changed
-                        })
-                    except Exception as e:
-                        logger.warning('Failed to send session notification', extra={
-                            'chat_id': chat_id,
-                            'error': str(e)
-                        })
-
-                # 标记已通知
-                self.chats[chat_id]['session_notified'] = True
-
-            # 调用原始回调
-            await on_response(response_text)
+        agent, _ = self.get_or_create_agent(chat_id)
 
         try:
-            # 调用 agent，锁由 agent 自己管理
-            await agent.send_message(text, wrapped_response)
+            # 调用 agent（消息入队，立即返回）
+            await agent.send_message(text)
 
             # 更新 chat 数据中的 session_id
             if agent.session_id:
@@ -151,10 +154,6 @@ class ChatManager:
             # 触发回调
             if self.response_complete_callback:
                 self.response_complete_callback()
-
-        except ConnectionError as e:
-            await on_response(f'❌ {e}\n提示：使用 /new 重置会话')
-            raise
 
         except asyncio.CancelledError:
             logger.info('Message processing cancelled', extra={'chat_id': chat_id})

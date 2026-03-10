@@ -21,7 +21,13 @@ def next_agent_id(chat_id: str) -> str:
 class Agent:
     """封装单个 Claude Code CLI 会话"""
 
-    def __init__(self, chat_id: str, cwd: str, resume_session_id: Optional[str]):
+    def __init__(
+        self,
+        chat_id: str,
+        cwd: str,
+        resume_session_id: Optional[str],
+        on_response: Callable[[str], Awaitable[None]]
+    ):
         """
         创建 Agent 实例
 
@@ -29,6 +35,7 @@ class Agent:
             chat_id: 飞书 chat ID
             cwd: 工作目录
             resume_session_id: 要恢复的 session ID（可选）
+            on_response: 响应回调函数，接收响应文本
         """
         self.agent_id = next_agent_id(chat_id)
         self.chat_id = chat_id
@@ -37,6 +44,11 @@ class Agent:
         self.start_time = time.time()
         self._connected = False
         self._is_busy = False  # 是否正在处理消息
+        self.on_response = on_response
+
+        # 消息队列
+        self._message_queue: asyncio.Queue = asyncio.Queue()
+        self._processing_task: Optional[asyncio.Task] = None
 
         # 创建 SDK 客户端
         from src.config import config
@@ -83,26 +95,36 @@ class Agent:
         """检查是否正在处理消息"""
         return self._is_busy
 
-    async def send_message(
-        self,
-        text: str,
-        on_response: Callable[[str], Awaitable[None]]
-    ):
+    async def send_message(self, text: str):
         """
-        发送消息并通过回调返回响应
+        发送消息（入队，立即返回）
 
         Args:
             text: 消息内容
-            on_response: 响应回调函数，接收响应文本
-
-        Raises:
-            RuntimeError: 如果正在处理其他消息
         """
-        # 检查是否正在处理
-        if self._is_busy:
-            raise RuntimeError('Agent 正在处理消息，请稍候')
+        await self._message_queue.put(text)
 
-        # 标记为忙碌
+        # 启动处理任务（如果未启动）
+        if self._processing_task is None or self._processing_task.done():
+            self._processing_task = asyncio.create_task(self._process_queue())
+
+    async def _process_queue(self):
+        """后台任务：循环处理队列"""
+        while True:
+            try:
+                text = await self._message_queue.get()
+                await self._handle_message(text)
+            except asyncio.CancelledError:
+                logger.info('Queue processing cancelled', extra={'agent_id': self.agent_id})
+                break
+            except Exception as e:
+                logger.error('Error processing message', extra={
+                    'agent_id': self.agent_id,
+                    'error': str(e)
+                })
+
+    async def _handle_message(self, text: str):
+        """实际处理单条消息"""
         self._is_busy = True
 
         try:
@@ -144,20 +166,36 @@ class Agent:
                     'agent_id': self.agent_id,
                     'response_length': len(full_response)
                 })
-                await on_response(full_response)
+                await self.on_response(full_response)
             else:
                 logger.warning('Empty response from CLI', extra={
                     'agent_id': self.agent_id
                 })
 
         finally:
-            # 无论成功失败，都清除忙碌标记
             self._is_busy = False
             logger.debug('Agent no longer busy', extra={'agent_id': self.agent_id})
 
     async def interrupt(self):
-        """中断当前操作（立即执行，不等锁）"""
+        """中断当前操作并清空队列"""
         logger.info('Interrupt requested', extra={'agent_id': self.agent_id})
+
+        # 清空队列
+        cleared = 0
+        while not self._message_queue.empty():
+            try:
+                self._message_queue.get_nowait()
+                cleared += 1
+            except asyncio.QueueEmpty:
+                break
+
+        if cleared > 0:
+            logger.info('Cleared message queue', extra={
+                'agent_id': self.agent_id,
+                'cleared_count': cleared
+            })
+
+        # 中断当前任务
         try:
             await self.client.interrupt()
         except Exception as e:
@@ -170,6 +208,15 @@ class Agent:
     async def destroy(self):
         """销毁 Agent（尽力优雅关闭）"""
         logger.info('Destroying agent', extra={'agent_id': self.agent_id})
+
+        # 取消处理任务
+        if self._processing_task and not self._processing_task.done():
+            self._processing_task.cancel()
+            try:
+                await self._processing_task
+            except asyncio.CancelledError:
+                pass
+
         try:
             await self.client.disconnect()
         except Exception as e:

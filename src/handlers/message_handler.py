@@ -225,45 +225,8 @@ async def handle_message_internal(data: dict, start_time: float):
     # 转发给 Claude Code
     reaction_id = message_service.add_reaction(message_id, 'Typing')
 
-    async def send_to_feishu(response_text: str):
-        """发送响应到飞书的回调"""
-        if not response_text.strip():
-            logger.warning('Empty response, skipping', extra={'chat_id': chat_id})
-            return
-
-        logger.info('Sending response to Feishu', extra={
-            'chat_id': chat_id,
-            'text_length': len(response_text)
-        })
-
-        try:
-            # 优先使用卡片消息（支持 Markdown）
-            await message_service.send_card_message(chat_id, response_text)
-            logger.info('Response sent successfully', extra={'chat_id': chat_id})
-        except Exception as e:
-            logger.error('Failed to send card message', extra={
-                'chat_id': chat_id,
-                'error': str(e)
-            })
-            # 降级到纯文本
-            try:
-                await message_service.send_text_message(chat_id, response_text)
-                logger.warning('Fallback to text message', extra={'chat_id': chat_id})
-            except Exception as e2:
-                logger.error('Failed to send fallback text message', extra={
-                    'chat_id': chat_id,
-                    'error': str(e2)
-                })
-
     try:
-        await chat_manager.send_message(chat_id, text, on_response=send_to_feishu)
-
-    except RuntimeError as e:
-        # Agent 正在忙碌
-        await message_service.send_text_message(
-            chat_id,
-            f'⏳ {str(e)}\n💡 提示：使用 /stop 可以中断当前任务'
-        )
+        await chat_manager.send_message(chat_id, text)
 
     except asyncio.CancelledError:
         await message_service.send_text_message(
