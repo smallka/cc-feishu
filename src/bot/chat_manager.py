@@ -252,29 +252,74 @@ class ChatManager:
             f'- 运行时长: {format_duration(uptime)}'
         )
 
+    def _get_valid_sessions(self, chat_id: str) -> list[tuple[str, str, Path]]:
+        """
+        获取有效的 session 列表（过滤空 session，按时间倒序）
+
+        Returns:
+            List of (session_id, cwd, file_path) tuples
+        """
+        chat_data = self.chats.get(chat_id, {})
+        cwd = chat_data.get('cwd', self.default_cwd)
+        is_root = (cwd == self.default_cwd)
+
+        normalized_path = str(Path(cwd).resolve()).replace(':', '-').replace('\\', '-').replace('/', '-')
+        projects_dir = Path.home() / '.claude' / 'projects' / normalized_path
+
+        sessions = []
+
+        if projects_dir.exists():
+            session_files = list(projects_dir.glob('*.jsonl'))
+            session_files.sort(key=lambda f: f.stat().st_mtime, reverse=True)
+
+            # 当前目录的 sessions（过滤空 session）
+            count = 0
+            for file in session_files:
+                if count >= 5:
+                    break
+                first_message = self._read_first_message(file, file.stem)
+                if first_message is None:
+                    continue
+                sessions.append((file.stem, cwd, file))
+                count += 1
+
+            # 如果在根目录，添加其他目录的 sessions
+            if is_root:
+                projects_root = Path.home() / '.claude' / 'projects'
+                subdirs = []
+
+                for subdir in projects_root.iterdir():
+                    if subdir.is_dir() and subdir != projects_dir and 'Temp' not in subdir.name:
+                        sub_sessions = list(subdir.glob('*.jsonl'))
+                        if sub_sessions:
+                            sub_sessions.sort(key=lambda f: f.stat().st_mtime, reverse=True)
+                            subdirs.append((subdir, sub_sessions[0]))
+
+                subdirs.sort(key=lambda x: x[1].stat().st_mtime, reverse=True)
+                subdirs = subdirs[:5]
+
+                for subdir, latest_file in subdirs:
+                    # 过滤空 session
+                    first_message = self._read_first_message(latest_file, latest_file.stem)
+                    if first_message is None:
+                        continue
+                    # 解析回原始路径
+                    dir_name = subdir.name.replace('-', ':', 1).replace('-', '\\')
+                    sessions.append((latest_file.stem, dir_name, latest_file))
+
+        return sessions
+
     async def list_sessions(self, chat_id: str) -> str:
         """列出当前工作目录的所有 sessions（按时间倒序）"""
         chat_data = self.chats.get(chat_id, {})
         cwd = chat_data.get('cwd', self.default_cwd)
         is_root = (cwd == self.default_cwd)
 
-        # 构造 projects 目录路径
-        normalized_path = str(Path(cwd).resolve()).replace(':', '-').replace('\\', '-').replace('/', '-')
-        projects_dir = Path.home() / '.claude' / 'projects' / normalized_path
+        # 获取有效 sessions
+        sessions = self._get_valid_sessions(chat_id)
 
-        if not projects_dir.exists():
+        if not sessions:
             return f'工作目录: `{cwd}`\n\n暂无 session 记录'
-
-        # 查找所有 .jsonl 文件
-        session_files = list(projects_dir.glob('*.jsonl'))
-
-        if not session_files:
-            return f'工作目录: `{cwd}`\n\n暂无 session 记录'
-
-        # 按修改时间倒序排序
-        session_files.sort(key=lambda f: f.stat().st_mtime, reverse=True)
-
-        import json
 
         current_session = chat_data.get('session_id')
         lines = []
@@ -287,103 +332,53 @@ class ChatManager:
             lines.append('**当前目录最新 5 个:**')
             lines.append('')
 
-            # 显示当前目录最新 5 个
-            count = 0
-            for file in session_files:
-                if count >= 5:
+            # 显示当前目录的 sessions
+            current_dir_count = 0
+            for i, (session_id, session_cwd, file) in enumerate(sessions, 1):
+                if session_cwd != cwd:
                     break
+                current_dir_count = i
 
-                session_id = file.stem
-
-                # 读取第一条用户消息
-                first_message = self._read_first_message(file, session_id)
-
-                # 跳过空 session
-                if first_message is None:
-                    continue
-
-                count += 1
                 mtime = file.stat().st_mtime
                 time_ago = format_duration(time.time() - mtime)
+                first_message = self._read_first_message(file, session_id)
 
                 marker = ' 🔵' if session_id == current_session else ''
-                lines.append(f'**{count}.** `{session_id[:8]}...`{marker}  ⏰ {time_ago}前')
+                lines.append(f'**{i}.** `{session_id[:8]}...`{marker}  ⏰ {time_ago}前')
                 lines.append(f'💬 {first_message}')
                 lines.append('')
 
-            # 查找其他子目录
-            projects_root = Path.home() / '.claude' / 'projects'
-            subdirs = []
-
-            for subdir in projects_root.iterdir():
-                if subdir.is_dir() and subdir != projects_dir and 'Temp' not in subdir.name:
-                    # 查找该目录最新的 session
-                    sub_sessions = list(subdir.glob('*.jsonl'))
-                    if sub_sessions:
-                        sub_sessions.sort(key=lambda f: f.stat().st_mtime, reverse=True)
-                        subdirs.append((subdir, sub_sessions[0]))
-
-            # 按最新 session 时间排序，取前 5 个
-            subdirs.sort(key=lambda x: x[1].stat().st_mtime, reverse=True)
-            subdirs = subdirs[:5]
-
-            if subdirs:
+            # 显示其他目录的 sessions
+            if current_dir_count < len(sessions):
                 lines.append('**其他目录最新:**')
                 lines.append('')
 
-                next_index = count + 1
-                for subdir, latest_file in subdirs:
-                    # 解析目录名
-                    dir_name = subdir.name.replace('-', '\\', 1).replace('-', '/')
-                    session_id = latest_file.stem
-
-                    # 读取第一条用户消息
-                    first_message = self._read_first_message(latest_file, session_id)
-
-                    # 跳过空 session
-                    if first_message is None:
-                        continue
-
-                    mtime = latest_file.stat().st_mtime
+                for i in range(current_dir_count, len(sessions)):
+                    session_id, session_cwd, file = sessions[i]
+                    mtime = file.stat().st_mtime
                     time_ago = format_duration(time.time() - mtime)
+                    first_message = self._read_first_message(file, session_id)
 
-                    lines.append(f'**{next_index}.** `{dir_name}`')
+                    lines.append(f'**{i + 1}.** `{session_cwd}`')
                     lines.append(f'   `{session_id[:8]}...`  ⏰ {time_ago}前')
                     lines.append(f'   💬 {first_message}')
                     lines.append('')
-                    next_index += 1
 
         else:
-            # 非根目录，只显示本目录最新 5 个
-            lines.append(f'**📋 Sessions ({len(session_files)} 个)**')
+            # 非根目录，只显示本目录
+            lines.append(f'**📋 Sessions ({len(sessions)} 个)**')
             lines.append(f'工作目录: `{cwd}`')
             lines.append('')
 
-            count = 0
-            for file in session_files:
-                if count >= 5:
-                    break
-
-                session_id = file.stem
-
-                # 读取第一条用户消息
-                first_message = self._read_first_message(file, session_id)
-
-                # 跳过空 session
-                if first_message is None:
-                    continue
-
-                count += 1
+            for i, (session_id, session_cwd, file) in enumerate(sessions, 1):
                 mtime = file.stat().st_mtime
                 time_ago = format_duration(time.time() - mtime)
+                first_message = self._read_first_message(file, session_id)
 
                 marker = ' 🔵' if session_id == current_session else ''
-                lines.append(f'**{count}.** `{session_id[:8]}...`{marker}  ⏰ {time_ago}前')
+                lines.append(f'**{i}.** `{session_id[:8]}...`{marker}  ⏰ {time_ago}前')
                 lines.append(f'💬 {first_message}')
                 lines.append('')
-
-            if len(session_files) > 5:
-                lines.append(f'_还有 {len(session_files) - 5} 个 session 未显示_')
 
         return '\n'.join(lines)
 
@@ -422,55 +417,10 @@ class ChatManager:
         Returns:
             List of (session_id, cwd) tuples
         """
-        chat_data = self.chats.get(chat_id, {})
-        cwd = chat_data.get('cwd', self.default_cwd)
-        is_root = (cwd == self.default_cwd)
-
-        normalized_path = str(Path(cwd).resolve()).replace(':', '-').replace('\\', '-').replace('/', '-')
-        projects_dir = Path.home() / '.claude' / 'projects' / normalized_path
-
-        sessions = []
-
-        if projects_dir.exists():
-            session_files = list(projects_dir.glob('*.jsonl'))
-            session_files.sort(key=lambda f: f.stat().st_mtime, reverse=True)
-
-            # 当前目录的 sessions（过滤空 session）
-            count = 0
-            for file in session_files:
-                if count >= 5:
-                    break
-                first_message = self._read_first_message(file, file.stem)
-                if first_message is None:
-                    continue
-                sessions.append((file.stem, cwd))
-                count += 1
-
-            # 如果在根目录，添加其他目录的 sessions
-            if is_root:
-                projects_root = Path.home() / '.claude' / 'projects'
-                subdirs = []
-
-                for subdir in projects_root.iterdir():
-                    if subdir.is_dir() and subdir != projects_dir and 'Temp' not in subdir.name:
-                        sub_sessions = list(subdir.glob('*.jsonl'))
-                        if sub_sessions:
-                            sub_sessions.sort(key=lambda f: f.stat().st_mtime, reverse=True)
-                            subdirs.append((subdir, sub_sessions[0]))
-
-                subdirs.sort(key=lambda x: x[1].stat().st_mtime, reverse=True)
-                subdirs = subdirs[:5]
-
-                for subdir, latest_file in subdirs:
-                    # 过滤空 session
-                    first_message = self._read_first_message(latest_file, latest_file.stem)
-                    if first_message is None:
-                        continue
-                    # 解析回原始路径
-                    dir_name = subdir.name.replace('-', ':', 1).replace('-', '\\')
-                    sessions.append((latest_file.stem, dir_name))
-
-        return sessions
+        # 使用公共函数获取有效 sessions
+        sessions = self._get_valid_sessions(chat_id)
+        # 转换为 (session_id, cwd) 格式
+        return [(session_id, cwd) for session_id, cwd, _ in sessions]
 
     async def resume_session(self, chat_id: str, session_id: str) -> str:
         """恢复到指定的 session"""
