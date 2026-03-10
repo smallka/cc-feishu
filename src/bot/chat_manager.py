@@ -275,7 +275,6 @@ class ChatManager:
         session_files.sort(key=lambda f: f.stat().st_mtime, reverse=True)
 
         import json
-        import datetime
 
         current_session = chat_data.get('session_id')
         lines = []
@@ -289,16 +288,26 @@ class ChatManager:
             lines.append('')
 
             # 显示当前目录最新 5 个
-            for i, file in enumerate(session_files[:5], 1):
+            count = 0
+            for file in session_files:
+                if count >= 5:
+                    break
+
                 session_id = file.stem
-                mtime = file.stat().st_mtime
-                time_str = datetime.datetime.fromtimestamp(mtime).strftime('%m-%d %H:%M')
 
                 # 读取第一条用户消息
                 first_message = self._read_first_message(file, session_id)
 
+                # 跳过空 session
+                if first_message is None:
+                    continue
+
+                count += 1
+                mtime = file.stat().st_mtime
+                time_ago = format_duration(time.time() - mtime)
+
                 marker = ' 🔵' if session_id == current_session else ''
-                lines.append(f'**{i}.** `{session_id[:8]}...`{marker}  ⏰ {time_str}')
+                lines.append(f'**{count}.** `{session_id[:8]}...`{marker}  ⏰ {time_ago}前')
                 lines.append(f'💬 {first_message}')
                 lines.append('')
 
@@ -322,20 +331,27 @@ class ChatManager:
                 lines.append('**其他目录最新:**')
                 lines.append('')
 
-                for i, (subdir, latest_file) in enumerate(subdirs, 6):  # 从 6 开始编号
+                next_index = count + 1
+                for subdir, latest_file in subdirs:
                     # 解析目录名
                     dir_name = subdir.name.replace('-', '\\', 1).replace('-', '/')
                     session_id = latest_file.stem
-                    mtime = latest_file.stat().st_mtime
-                    time_str = datetime.datetime.fromtimestamp(mtime).strftime('%m-%d %H:%M')
 
                     # 读取第一条用户消息
                     first_message = self._read_first_message(latest_file, session_id)
 
-                    lines.append(f'**{i}.** `{dir_name}`')
-                    lines.append(f'   `{session_id[:8]}...`  ⏰ {time_str}')
+                    # 跳过空 session
+                    if first_message is None:
+                        continue
+
+                    mtime = latest_file.stat().st_mtime
+                    time_ago = format_duration(time.time() - mtime)
+
+                    lines.append(f'**{next_index}.** `{dir_name}`')
+                    lines.append(f'   `{session_id[:8]}...`  ⏰ {time_ago}前')
                     lines.append(f'   💬 {first_message}')
                     lines.append('')
+                    next_index += 1
 
         else:
             # 非根目录，只显示本目录最新 5 个
@@ -343,16 +359,26 @@ class ChatManager:
             lines.append(f'工作目录: `{cwd}`')
             lines.append('')
 
-            for i, file in enumerate(session_files[:5], 1):
+            count = 0
+            for file in session_files:
+                if count >= 5:
+                    break
+
                 session_id = file.stem
-                mtime = file.stat().st_mtime
-                time_str = datetime.datetime.fromtimestamp(mtime).strftime('%m-%d %H:%M')
 
                 # 读取第一条用户消息
                 first_message = self._read_first_message(file, session_id)
 
+                # 跳过空 session
+                if first_message is None:
+                    continue
+
+                count += 1
+                mtime = file.stat().st_mtime
+                time_ago = format_duration(time.time() - mtime)
+
                 marker = ' 🔵' if session_id == current_session else ''
-                lines.append(f'**{i}.** `{session_id[:8]}...`{marker}  ⏰ {time_str}')
+                lines.append(f'**{count}.** `{session_id[:8]}...`{marker}  ⏰ {time_ago}前')
                 lines.append(f'💬 {first_message}')
                 lines.append('')
 
@@ -361,11 +387,11 @@ class ChatManager:
 
         return '\n'.join(lines)
 
-    def _read_first_message(self, file: Path, session_id: str) -> str:
-        """读取 session 文件的第一条用户消息"""
+    def _read_first_message(self, file: Path, session_id: str) -> str | None:
+        """读取 session 文件的第一条用户消息，返回 None 表示空 session"""
         import json
 
-        first_message = '(无消息)'
+        first_message = None
         try:
             with open(file, 'r', encoding='utf-8') as f:
                 for line in f:
