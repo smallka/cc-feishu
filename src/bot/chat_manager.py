@@ -8,6 +8,21 @@ from src.claude.agent import Agent
 logger = logging.getLogger(__name__)
 
 
+def format_duration(seconds: float) -> str:
+    """格式化时长显示"""
+    seconds = int(seconds)
+    if seconds < 60:
+        return f'{seconds}秒'
+    elif seconds < 3600:
+        minutes = seconds // 60
+        secs = seconds % 60
+        return f'{minutes}分{secs}秒'
+    else:
+        hours = seconds // 3600
+        minutes = (seconds % 3600) // 60
+        return f'{hours}小时{minutes}分'
+
+
 class ChatManager:
     """管理多个 Chat 的 Agent 实例"""
 
@@ -229,7 +244,7 @@ class ChatManager:
             f'会话信息:\n'
             f'- Session ID: {session_id[:16]}...\n'
             f'- 工作目录: {cwd}\n'
-            f'- 运行时长: {int(uptime)}秒'
+            f'- 运行时长: {format_duration(uptime)}'
         )
 
     def get_debug_info(self) -> str:
@@ -237,7 +252,7 @@ class ChatManager:
         uptime = time.time() - self.start_time
         info = [
             '**系统状态**',
-            f'- 运行时长: {int(uptime)}秒',
+            f'- 运行时长: {format_duration(uptime)}',
             f'- 活跃会话: {len(self.chats)}',
             f'- 活跃 Agent: {len(self.agents)}',
             '',
