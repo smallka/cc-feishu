@@ -71,10 +71,20 @@ async def main():
         logger.info('Shutting down')
         await chat_manager.stop()
         await websocket_manager.stop()
+
+        # 等待所有任务完成，防止管道未关闭
+        await asyncio.sleep(0.5)
+
         logger.info('Application stopped')
 
 
 if __name__ == '__main__':
+    # 在 Windows 上抑制 ResourceWarning（管道关闭警告）
+    import warnings
+    import platform
+    if platform.system() == 'Windows':
+        warnings.filterwarnings('ignore', category=ResourceWarning)
+
     # 配置根 logger，这样所有子 logger 都会继承配置
     logging.basicConfig(
         level=getattr(logging, config.log_level.upper()),
