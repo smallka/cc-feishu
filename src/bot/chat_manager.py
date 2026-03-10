@@ -435,9 +435,16 @@ class ChatManager:
             session_files = list(projects_dir.glob('*.jsonl'))
             session_files.sort(key=lambda f: f.stat().st_mtime, reverse=True)
 
-            # 当前目录的 sessions
-            for file in session_files[:5]:
+            # 当前目录的 sessions（过滤空 session）
+            count = 0
+            for file in session_files:
+                if count >= 5:
+                    break
+                first_message = self._read_first_message(file, file.stem)
+                if first_message is None:
+                    continue
                 sessions.append((file.stem, cwd))
+                count += 1
 
             # 如果在根目录，添加其他目录的 sessions
             if is_root:
@@ -455,6 +462,10 @@ class ChatManager:
                 subdirs = subdirs[:5]
 
                 for subdir, latest_file in subdirs:
+                    # 过滤空 session
+                    first_message = self._read_first_message(latest_file, latest_file.stem)
+                    if first_message is None:
+                        continue
                     # 解析回原始路径
                     dir_name = subdir.name.replace('-', ':', 1).replace('-', '\\')
                     sessions.append((latest_file.stem, dir_name))
