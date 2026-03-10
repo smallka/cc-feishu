@@ -33,26 +33,63 @@ src/
 
 ## 核心架构
 
+### 职责分工
+
+**MessageHandler** (`src/handlers/message_handler.py`)：
+- 消息路由和业务逻辑协调
+- 解析用户消息（命令 vs 普通消息）
+- 处理命令（/help, /new, /stop 等）
+- 管理 Reaction 生命周期（添加/移除）
+- 处理 Session 变化通知
+
+**ChatManager** (`src/bot/chat_manager.py`)：
+- Agent 生命周期管理
+- 管理 chat → agent 映射
+- 创建/销毁/重置 Agent
+- 不涉及业务逻辑（reaction、通知等）
+
+**Agent** (`src/claude/agent.py`)：
+- 封装单个 Claude Code CLI 进程
+- 管理消息队列（自动排队，避免拒绝）
+- 使用 `claude-agent-sdk` 的 `ClaudeSDKClient`
+- 自动批准工具权限（`permission_mode='bypassPermissions'`）
+
+**MessageService** (`src/services/message_service.py`)：
+- 飞书消息发送（文本/卡片）
+- Reaction 管理（添加/移除）
+- 不涉及业务逻辑
+
 ### 消息流转
 
 ```
-用户消息 → 飞书服务器 → WebSocket → message_handler
-  → ChatManager.send_message(chat_id, text)
-  → Agent.send_message(text)
-  → ClaudeSDKClient (stdin 写入)
-  → Claude Code CLI 进程
-  → ClaudeSDKClient (stdout 读取)
-  → 收集 assistant 消息
-  → 触发回调
-  → MessageService.send_text_message
-  → 飞书服务器 → 用户
+用户消息 → 飞书服务器 → WebSocket → MessageHandler
+  ↓
+  添加 Reaction (Typing)
+  ↓
+  ChatManager.send_message(chat_id, message_id, text)
+  ↓
+  Agent.send_message(message_id, text) [入队]
+  ↓
+  后台任务从队列取出消息
+  ↓
+  ClaudeSDKClient (stdin 写入)
+  ↓
+  Claude Code CLI 进程
+  ↓
+  ClaudeSDKClient (stdout 读取)
+  ↓
+  收集 assistant 消息
+  ↓
+  触发回调 → MessageService.send_text_message
+  ↓
+  飞书服务器 → 用户
+  ↓
+  MessageHandler 移除 Reaction
 ```
 
 ### 会话管理
 
-**ChatManager** (`src/bot/chat_manager.py`)：
-
-**数据结构**：
+**ChatManager 数据结构**：
 - `chats: Dict[chat_id, ChatData]` - 存储会话元数据（cwd, session_id, session_notified）
 - `agents: Dict[chat_id, Agent]` - 管理 Agent 进程实例
 
@@ -68,11 +105,13 @@ src/
 - **`/new` 重置**：销毁 Agent，删除 ChatData（下次消息在当前 cwd 创建新会话）
 - **Agent 进程死亡**：下次消息时自动清理并重启
 
-**Agent** (`src/claude/agent.py`)：
-- 封装单个 Claude Code CLI 进程
-- 使用 `claude-agent-sdk` 的 `ClaudeSDKClient`
-- 提供 `send_message()` / `interrupt()` / `close()` 接口
-- 自动批准工具权限（`permission_mode='bypassPermissions'`）
+### 消息队列机制
+
+**Agent 内部队列**：
+- 消息自动排队，不会被拒绝
+- 串行处理，保证顺序
+- `/stop` 中断当前任务并清空队列
+- 队列存储 `(message_id, text)` 元组
 
 ### 命令处理
 
