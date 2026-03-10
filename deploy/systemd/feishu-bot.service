@@ -1,0 +1,66 @@
+# Systemd service file for Feishu Bot
+#
+# 安装步骤：
+# 1. 复制此文件到 /etc/systemd/system/feishu-bot.service
+# 2. 修改 User、WorkingDirectory、ExecStart 路径
+# 3. 运行：sudo systemctl daemon-reload
+# 4. 启动：sudo systemctl start feishu-bot
+# 5. 开机自启：sudo systemctl enable feishu-bot
+#
+# 管理命令：
+# - 查看状态：sudo systemctl status feishu-bot
+# - 查看日志：sudo journalctl -u feishu-bot -f
+# - 重启服务：sudo systemctl restart feishu-bot
+# - 停止服务：sudo systemctl stop feishu-bot
+
+[Unit]
+Description=Feishu Bot with Claude Code Integration
+Documentation=https://github.com/your-org/cc-feishu
+After=network.target network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+
+# 运行用户（修改为实际用户）
+User=your-user
+Group=your-user
+
+# 工作目录（修改为实际路径）
+WorkingDirectory=/path/to/cc-feishu
+
+# 环境变量
+# 注意：敏感信息应该放在 .env 文件中，不要写在这里
+Environment="PATH=/usr/local/bin:/usr/bin:/bin"
+Environment="PYTHONUNBUFFERED=1"
+
+# 启动命令（修改 Python 路径）
+# 如果使用虚拟环境：/path/to/venv/bin/python
+# 如果使用系统 Python：/usr/bin/python3
+ExecStart=/usr/bin/python3 -m src.main
+
+# 重启策略
+# WebSocket 断开时进程会退出，systemd 会自动重启
+Restart=always
+RestartSec=10
+StartLimitInterval=300
+StartLimitBurst=5
+
+# 日志输出
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=feishu-bot
+
+# 安全加固（可选）
+# NoNewPrivileges=true
+# PrivateTmp=true
+# ProtectSystem=strict
+# ProtectHome=true
+# ReadWritePaths=/path/to/cc-feishu
+
+# 资源限制（可选）
+# LimitNOFILE=65536
+# MemoryLimit=512M
+
+[Install]
+WantedBy=multi-user.target
