@@ -26,7 +26,6 @@ class Agent:
         chat_id: str,
         cwd: str,
         resume_session_id: Optional[str],
-        on_message_start: Callable[[str], Awaitable[None]],
         on_response: Callable[[str], Awaitable[None]]
     ):
         """
@@ -36,7 +35,6 @@ class Agent:
             chat_id: 飞书 chat ID
             cwd: 工作目录
             resume_session_id: 要恢复的 session ID（可选）
-            on_message_start: 消息开始处理回调，接收 message_id
             on_response: 响应回调函数，接收响应文本
         """
         self.agent_id = next_agent_id(chat_id)
@@ -46,7 +44,6 @@ class Agent:
         self.start_time = time.time()
         self._connected = False
         self._is_busy = False  # 是否正在处理消息
-        self.on_message_start = on_message_start
         self.on_response = on_response
 
         # 消息队列：存储 (message_id, text)
@@ -132,9 +129,6 @@ class Agent:
         self._is_busy = True
 
         try:
-            # 通知开始处理
-            await self.on_message_start(message_id)
-
             await self.ensure_connected()
 
             response_parts = []

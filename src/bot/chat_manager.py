@@ -15,7 +15,6 @@ class ChatManager:
         from src.config import config
         self.chats: Dict[str, dict] = {}  # chat_id -> {cwd, session_id, session_notified}
         self.agents: Dict[str, Agent] = {}  # chat_id -> Agent
-        self.current_reactions: Dict[str, tuple] = {}  # chat_id -> (message_id, reaction_id)
         self.default_cwd = config.claude.work_root
         self.start_time = time.time()
         self.response_complete_callback: Optional[Callable[[], None]] = None
@@ -63,83 +62,8 @@ class ChatManager:
         cwd = chat_data.get('cwd', self.default_cwd)
         session_id = chat_data.get('session_id')
 
-        # 定义消息开始处理回调
-        async def on_message_start(message_id: str):
-            # 移除旧 reaction
-            if chat_id in self.current_reactions:
-                old_message_id, old_reaction_id = self.current_reactions[chat_id]
-                from src.services.message_service import message_service
-                try:
-                    message_service.remove_reaction(old_message_id, old_reaction_id)
-                except Exception as e:
-                    logger.warning('Failed to remove old reaction', extra={
-                        'chat_id': chat_id,
-                        'error': str(e)
-                    })
-
-            # 添加新 reaction
-            from src.services.message_service import message_service
-            try:
-                reaction_id = message_service.add_reaction(message_id, 'Typing')
-                self.current_reactions[chat_id] = (message_id, reaction_id)
-                logger.debug('Added reaction', extra={
-                    'chat_id': chat_id,
-                    'message_id': message_id
-                })
-            except Exception as e:
-                logger.warning('Failed to add reaction', extra={
-                    'chat_id': chat_id,
-                    'error': str(e)
-                })
-
-        # 定义响应回调
+        # 定义响应回调：发送响应消息
         async def on_response(response_text: str):
-            # 移除 reaction
-            if chat_id in self.current_reactions:
-                message_id, reaction_id = self.current_reactions.pop(chat_id)
-                from src.services.message_service import message_service
-                try:
-                    message_service.remove_reaction(message_id, reaction_id)
-                except Exception as e:
-                    logger.warning('Failed to remove reaction', extra={
-                        'chat_id': chat_id,
-                        'error': str(e)
-                    })
-
-            # 检查 session 是否变化（仅首次响应）
-            chat_data = self.chats.get(chat_id, {})
-            if not chat_data.get('session_notified', False):
-                actual_session_id = agent.get_session_id()
-                session_changed = actual_session_id != session_id
-
-                # 生成通知消息
-                notification = None
-                if not session_id:
-                    # 首次创建会话
-                    notification = f'🆕 新会话: {agent.get_cwd()} ({actual_session_id})'
-                elif session_changed:
-                    # 恢复失败
-                    notification = f'⚠️ 恢复失败，已创建新会话: {agent.get_cwd()} ({actual_session_id})'
-
-                # 发送通知
-                if notification:
-                    from src.services.message_service import message_service
-                    try:
-                        await message_service.send_text_message(chat_id, notification)
-                        logger.info('Session change notification sent', extra={
-                            'chat_id': chat_id,
-                            'session_changed': session_changed
-                        })
-                    except Exception as e:
-                        logger.error('Failed to send session notification', extra={
-                            'chat_id': chat_id,
-                            'error': str(e)
-                        })
-
-                # 标记已通知
-                self.chats[chat_id]['session_notified'] = True
-
-            # 发送响应消息
             from src.services.message_service import message_service
             try:
                 await message_service.send_text_message(chat_id, response_text)
@@ -150,7 +74,7 @@ class ChatManager:
                 })
 
         try:
-            agent = Agent(chat_id, cwd, session_id, on_message_start, on_response)
+            agent = Agent(chat_id, cwd, session_id, on_response)
             self.agents[chat_id] = agent
 
             # 初始化 chat 数据（重置 session_notified）
@@ -218,19 +142,6 @@ class ChatManager:
 
         try:
             await asyncio.wait_for(agent.interrupt(), timeout=3.0)
-
-            # 清理 reaction
-            if chat_id in self.current_reactions:
-                message_id, reaction_id = self.current_reactions.pop(chat_id)
-                from src.services.message_service import message_service
-                try:
-                    message_service.remove_reaction(message_id, reaction_id)
-                except Exception as e:
-                    logger.warning('Failed to remove reaction after interrupt', extra={
-                        'chat_id': chat_id,
-                        'error': str(e)
-                    })
-
             return 'success'
         except asyncio.TimeoutError:
             logger.warning('Interrupt timeout', extra={'chat_id': chat_id})

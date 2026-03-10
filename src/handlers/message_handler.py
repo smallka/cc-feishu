@@ -223,8 +223,48 @@ async def handle_message_internal(data: dict, start_time: float):
         return
 
     # 转发给 Claude Code
+    reaction_id = None
     try:
+        # 添加 reaction
+        reaction_id = message_service.add_reaction(message_id, 'Typing')
+
+        # 获取或创建 agent，检查 session 变化
+        agent, expected_session_id = chat_manager.get_or_create_agent(chat_id)
+
+        # 发送消息
         await chat_manager.send_message(chat_id, message_id, text)
+
+        # 检查 session 是否变化（仅首次响应）
+        chat_data = chat_manager.chats.get(chat_id, {})
+        if not chat_data.get('session_notified', False):
+            actual_session_id = agent.get_session_id()
+            session_changed = actual_session_id != expected_session_id
+
+            # 生成通知消息
+            notification = None
+            if not expected_session_id:
+                # 首次创建会话
+                notification = f'🆕 新会话: {agent.get_cwd()} ({actual_session_id})'
+            elif session_changed:
+                # 恢复失败
+                notification = f'⚠️ 恢复失败，已创建新会话: {agent.get_cwd()} ({actual_session_id})'
+
+            # 发送通知
+            if notification:
+                try:
+                    await message_service.send_text_message(chat_id, notification)
+                    logger.info('Session change notification sent', extra={
+                        'chat_id': chat_id,
+                        'session_changed': session_changed
+                    })
+                except Exception as e:
+                    logger.error('Failed to send session notification', extra={
+                        'chat_id': chat_id,
+                        'error': str(e)
+                    })
+
+            # 标记已通知
+            chat_manager.chats[chat_id]['session_notified'] = True
 
     except asyncio.CancelledError:
         await message_service.send_text_message(
@@ -242,6 +282,14 @@ async def handle_message_internal(data: dict, start_time: float):
             chat_id,
             f'❌ 处理消息时出错: {str(e)}\n提示：使用 /new 可以重置会话'
         )
+
+    finally:
+        # 移除 reaction
+        if reaction_id:
+            try:
+                message_service.remove_reaction(message_id, reaction_id)
+            except Exception as e:
+                logger.warning('Failed to remove reaction', extra={'error': str(e)})
 
     # 记录处理时长
     duration = time.time() - start_time
