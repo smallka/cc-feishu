@@ -13,7 +13,7 @@ class ChatManager:
 
     def __init__(self):
         from src.config import config
-        self.chats: Dict[str, dict] = {}  # chat_id -> {cwd, session_id}
+        self.chats: Dict[str, dict] = {}  # chat_id -> {cwd, session_id, session_notified}
         self.agents: Dict[str, Agent] = {}  # chat_id -> Agent
         self.default_cwd = config.claude.work_root
         self.start_time = time.time()
@@ -27,7 +27,10 @@ class ChatManager:
         """停止 ChatManager，清理所有 Agent"""
         for chat_id, agent in list(self.agents.items()):
             try:
-                await asyncio.wait_for(agent.destroy(), timeout=2.0)
+                # 增加超时时间，给 Windows 管道更多关闭时间
+                await asyncio.wait_for(agent.destroy(), timeout=5.0)
+            except asyncio.TimeoutError:
+                logger.warning('Agent destroy timeout', extra={'chat_id': chat_id})
             except Exception as e:
                 logger.error('Error destroying agent', extra={
                     'chat_id': chat_id,
@@ -41,13 +44,18 @@ class ChatManager:
         """注册响应完成回调"""
         self.response_complete_callback = callback
 
-    def get_or_create_agent(self, chat_id: str) -> Agent:
-        """获取或创建 Agent"""
+    def get_or_create_agent(self, chat_id: str) -> tuple[Agent, str | None]:
+        """
+        获取或创建 Agent
+
+        Returns:
+            (agent, expected_session_id): Agent 实例和期望的 session ID
+        """
         agent = self.agents.get(chat_id)
 
         # 检查是否存活
         if agent and agent.client:
-            return agent
+            return agent, agent.get_session_id()
         elif agent:
             # Agent 已损坏，清理
             logger.warning('Agent damaged, cleaning up', extra={'chat_id': chat_id})
@@ -62,11 +70,14 @@ class ChatManager:
             agent = Agent(chat_id, cwd, session_id)
             self.agents[chat_id] = agent
 
-            # 初始化 chat 数据
+            # 初始化 chat 数据（重置 session_notified）
             if chat_id not in self.chats:
-                self.chats[chat_id] = {'cwd': cwd, 'session_id': session_id}
+                self.chats[chat_id] = {'cwd': cwd, 'session_id': session_id, 'session_notified': False}
+            else:
+                self.chats[chat_id]['session_notified'] = False
 
-            return agent
+            # 返回期望的 session_id（用于后续对比）
+            return agent, session_id
         except Exception as e:
             logger.error('Failed to create agent', extra={
                 'chat_id': chat_id,
@@ -88,11 +99,51 @@ class ChatManager:
             text: 消息内容
             on_response: 响应回调函数，接收响应文本
         """
-        agent = self.get_or_create_agent(chat_id)
+        agent, expected_session_id = self.get_or_create_agent(chat_id)
+
+        # 包装回调，在首次响应时检查 session 变化
+        async def wrapped_response(response_text: str):
+            # 检查 session 是否变化（仅首次响应）
+            chat_data = self.chats.get(chat_id, {})
+            if not chat_data.get('session_notified', False):
+                actual_session_id = agent.get_session_id()
+                session_changed = actual_session_id != expected_session_id
+
+                # 生成通知消息
+                notification = None
+                if not expected_session_id:
+                    # 首次创建会话
+                    notification = f'🆕 新会话: {agent.get_cwd()} ({actual_session_id})'
+                elif session_changed:
+                    # 恢复失败
+                    notification = f'⚠️ 恢复失败，已创建新会话: {agent.get_cwd()} ({actual_session_id})'
+
+                # 发送通知
+                if notification:
+                    from src.services.message_service import message_service
+                    try:
+                        await message_service.send_text_message(chat_id, notification)
+                        logger.info('Session change notification sent', extra={
+                            'chat_id': chat_id,
+                            'expected': expected_session_id,
+                            'actual': actual_session_id,
+                            'changed': session_changed
+                        })
+                    except Exception as e:
+                        logger.warning('Failed to send session notification', extra={
+                            'chat_id': chat_id,
+                            'error': str(e)
+                        })
+
+                # 标记已通知
+                self.chats[chat_id]['session_notified'] = True
+
+            # 调用原始回调
+            await on_response(response_text)
 
         try:
             # 调用 agent，锁由 agent 自己管理
-            await agent.send_message(text, on_response)
+            await agent.send_message(text, wrapped_response)
 
             # 更新 chat 数据中的 session_id
             if agent.session_id:
@@ -157,9 +208,9 @@ class ChatManager:
             # 强制清理
             self.agents.pop(chat_id, None)
 
-        # 保留 cwd，清空 session_id
+        # 保留 cwd，清空 session_id 和通知标志
         cwd = self.chats.get(chat_id, {}).get('cwd', self.default_cwd)
-        self.chats[chat_id] = {'cwd': cwd, 'session_id': None}
+        self.chats[chat_id] = {'cwd': cwd, 'session_id': None, 'session_notified': False}
 
         logger.info('Session reset', extra={'chat_id': chat_id})
         return cwd
@@ -191,8 +242,8 @@ class ChatManager:
             # 强制清理
             self.agents.pop(chat_id, None)
 
-        # 更新 cwd，清空 session_id
-        self.chats[chat_id] = {'cwd': new_cwd, 'session_id': None}
+        # 更新 cwd，清空 session_id 和通知标志
+        self.chats[chat_id] = {'cwd': new_cwd, 'session_id': None, 'session_notified': False}
         logger.info('Switched cwd', extra={
             'chat_id': chat_id,
             'new_cwd': new_cwd
