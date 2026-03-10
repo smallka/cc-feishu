@@ -17,10 +17,14 @@ def format_duration(seconds: float) -> str:
         minutes = seconds // 60
         secs = seconds % 60
         return f'{minutes}分{secs}秒'
-    else:
+    elif seconds < 86400:
         hours = seconds // 3600
         minutes = (seconds % 3600) // 60
         return f'{hours}小时{minutes}分'
+    else:
+        days = seconds // 86400
+        hours = (seconds % 86400) // 3600
+        return f'{days}天{hours}小时'
 
 
 class ChatManager:
