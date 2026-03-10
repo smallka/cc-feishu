@@ -26,6 +26,7 @@ class Agent:
         chat_id: str,
         cwd: str,
         resume_session_id: Optional[str],
+        on_message_start: Callable[[str], Awaitable[None]],
         on_response: Callable[[str], Awaitable[None]]
     ):
         """
@@ -35,6 +36,7 @@ class Agent:
             chat_id: 飞书 chat ID
             cwd: 工作目录
             resume_session_id: 要恢复的 session ID（可选）
+            on_message_start: 消息开始处理回调，接收 message_id
             on_response: 响应回调函数，接收响应文本
         """
         self.agent_id = next_agent_id(chat_id)
@@ -44,9 +46,10 @@ class Agent:
         self.start_time = time.time()
         self._connected = False
         self._is_busy = False  # 是否正在处理消息
+        self.on_message_start = on_message_start
         self.on_response = on_response
 
-        # 消息队列
+        # 消息队列：存储 (message_id, text)
         self._message_queue: asyncio.Queue = asyncio.Queue()
         self._processing_task: Optional[asyncio.Task] = None
 
@@ -95,14 +98,15 @@ class Agent:
         """检查是否正在处理消息"""
         return self._is_busy
 
-    async def send_message(self, text: str):
+    async def send_message(self, message_id: str, text: str):
         """
         发送消息（入队，立即返回）
 
         Args:
+            message_id: 消息 ID
             text: 消息内容
         """
-        await self._message_queue.put(text)
+        await self._message_queue.put((message_id, text))
 
         # 启动处理任务（如果未启动）
         if self._processing_task is None or self._processing_task.done():
@@ -112,8 +116,8 @@ class Agent:
         """后台任务：循环处理队列"""
         while True:
             try:
-                text = await self._message_queue.get()
-                await self._handle_message(text)
+                message_id, text = await self._message_queue.get()
+                await self._handle_message(message_id, text)
             except asyncio.CancelledError:
                 logger.info('Queue processing cancelled', extra={'agent_id': self.agent_id})
                 break
@@ -123,17 +127,21 @@ class Agent:
                     'error': str(e)
                 })
 
-    async def _handle_message(self, text: str):
+    async def _handle_message(self, message_id: str, text: str):
         """实际处理单条消息"""
         self._is_busy = True
 
         try:
+            # 通知开始处理
+            await self.on_message_start(message_id)
+
             await self.ensure_connected()
 
             response_parts = []
 
             logger.info('Sending message to CLI', extra={
                 'agent_id': self.agent_id,
+                'message_id': message_id,
                 'text_length': len(text)
             })
 

@@ -223,10 +223,8 @@ async def handle_message_internal(data: dict, start_time: float):
         return
 
     # 转发给 Claude Code
-    reaction_id = message_service.add_reaction(message_id, 'Typing')
-
     try:
-        await chat_manager.send_message(chat_id, text)
+        await chat_manager.send_message(chat_id, message_id, text)
 
     except asyncio.CancelledError:
         await message_service.send_text_message(
@@ -244,13 +242,6 @@ async def handle_message_internal(data: dict, start_time: float):
             chat_id,
             f'❌ 处理消息时出错: {str(e)}\n提示：使用 /new 可以重置会话'
         )
-
-    finally:
-        if reaction_id:
-            try:
-                message_service.remove_reaction(message_id, reaction_id)
-            except Exception as e:
-                logger.warning('Failed to remove reaction', extra={'error': str(e)})
 
     # 记录处理时长
     duration = time.time() - start_time
