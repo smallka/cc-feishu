@@ -53,13 +53,9 @@ class ChatManager:
         """
         agent = self.agents.get(chat_id)
 
-        # 检查是否存活
-        if agent and agent.client:
+        # 如果已存在，直接返回
+        if agent:
             return agent, agent.get_session_id()
-        elif agent:
-            # Agent 已损坏，清理
-            logger.warning('Agent damaged, cleaning up', extra={'chat_id': chat_id})
-            self.agents.pop(chat_id, None)
 
         # 创建新 Agent
         chat_data = self.chats.get(chat_id, {})
@@ -283,17 +279,36 @@ class ChatManager:
 
         for chat_id, data in self.chats.items():
             agent = self.agents.get(chat_id)
-            agent_status = '运行中' if agent else '未启动'
             session_id = data.get('session_id', '无')
             if session_id and session_id != '无':
                 session_id = session_id[:8] + '...'
 
-            info.append(
-                f'- Chat: `{chat_id[:8]}...`\n'
-                f'  - Agent: {agent_status}\n'
-                f'  - Session: `{session_id}`\n'
-                f'  - CWD: `{data.get("cwd", "N/A")}`'
-            )
+            if agent:
+                agent_id = agent.get_agent_id()
+                # 截断 agent_id，只保留前 12 个字符
+                agent_id_short = agent_id[:12] + '...' if len(agent_id) > 12 else agent_id
+
+                # 获取状态（优先显示更重要的状态）
+                if not agent._connected:
+                    status = '未连接'
+                elif agent.is_busy():
+                    status = '处理中'
+                else:
+                    status = '空闲'
+
+                info.append(
+                    f'- Chat: `{chat_id[:8]}...`\n'
+                    f'  - Agent: {status} `{agent_id_short}`\n'
+                    f'  - Session: `{session_id}`\n'
+                    f'  - CWD: `{data.get("cwd", "N/A")}`'
+                )
+            else:
+                info.append(
+                    f'- Chat: `{chat_id[:8]}...`\n'
+                    f'  - Agent: 未启动\n'
+                    f'  - Session: `{session_id}`\n'
+                    f'  - CWD: `{data.get("cwd", "N/A")}`'
+                )
 
         return '\n'.join(info)
 
