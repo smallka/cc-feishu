@@ -1,5 +1,5 @@
 [project]
-name = "cc-feishu"
+name = "cc-feishu-python"
 version = "0.1.0"
 description = "Feishu bot with Claude Code CLI integration"
 requires-python = ">=3.10"
