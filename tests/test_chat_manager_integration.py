@@ -1,33 +1,77 @@
-"""ChatManager 集成测试"""
+"""ChatManager integration tests with a fake Agent."""
+import time
+from unittest.mock import AsyncMock, patch
+
 import pytest
-import asyncio
+
 from src.bot.chat_manager import ChatManager
 
 
+class FakeAgent:
+    """Minimal Agent stub that behaves like the current async contract."""
+
+    def __init__(self, chat_id, cwd, resume_session_id, on_response):
+        self.chat_id = chat_id
+        self.cwd = cwd
+        self.session_id = resume_session_id
+        self.on_response = on_response
+        self.agent_id = f"agent-{chat_id}"
+        self.start_time = time.time()
+        self._connected = False
+        self._busy = False
+        self.destroyed = False
+        self.interrupted = False
+
+    async def ensure_connected(self):
+        self._connected = True
+
+    async def send_message(self, message_id, text):
+        self._busy = True
+        await self.ensure_connected()
+        if self.session_id is None:
+            self.session_id = f"session-{self.chat_id}"
+        await self.on_response(f"reply:{text}")
+        self._busy = False
+
+    async def interrupt(self):
+        self.interrupted = True
+
+    async def destroy(self):
+        self.destroyed = True
+
+    def is_busy(self):
+        return self._busy
+
+    def get_agent_id(self):
+        return self.agent_id
+
+    def get_cwd(self):
+        return self.cwd
+
+    def get_session_id(self):
+        return self.session_id
+
+    def get_start_time(self):
+        return self.start_time
+
+
 @pytest.mark.asyncio
-async def test_send_message():
-    """测试发送消息"""
+async def test_enqueue_message():
+    """ChatManager should create an Agent and persist its session."""
     manager = ChatManager()
     await manager.start()
 
     try:
-        # 收集响应
-        responses = []
-        async def collect_response(text: str):
-            responses.append(text)
+        with patch("src.bot.chat_manager.Agent", FakeAgent), patch(
+            "src.services.message_service.message_service.send_text_message",
+            new_callable=AsyncMock,
+        ) as send_text:
+            await manager.enqueue_message("test_chat", "msg-1", "What is 2+2?")
 
-        # 发送消息
-        await manager.send_message('test_chat', 'What is 2+2?', collect_response)
-
-        # 验证 Agent 已创建
-        assert 'test_chat' in manager.agents
-        assert 'test_chat' in manager.chats
-
-        # 验证 session_id 已更新
-        assert manager.chats['test_chat']['session_id'] is not None
-
-        # 验证收到响应
-        assert len(responses) > 0
+            assert "test_chat" in manager.agents
+            assert "test_chat" in manager.chats
+            assert manager.chats["test_chat"]["session_id"] == "session-test_chat"
+            send_text.assert_awaited_once_with("test_chat", "reply:What is 2+2?")
 
     finally:
         await manager.stop()
@@ -35,40 +79,44 @@ async def test_send_message():
 
 @pytest.mark.asyncio
 async def test_multiple_chats():
-    """测试多个 chat 独立工作"""
+    """Different chats should keep separate Agent/session state."""
     manager = ChatManager()
     await manager.start()
 
     try:
-        # 收集响应
-        responses1 = []
-        responses2 = []
+        with patch("src.bot.chat_manager.Agent", FakeAgent), patch(
+            "src.services.message_service.message_service.send_text_message",
+            new_callable=AsyncMock,
+        ) as send_text:
+            await manager.enqueue_message("chat1", "msg-1", "Hello from chat1")
+            await manager.enqueue_message("chat2", "msg-2", "Hello from chat2")
 
-        async def collect_response1(text: str):
-            responses1.append(text)
+            assert len(manager.agents) == 2
+            assert "chat1" in manager.agents
+            assert "chat2" in manager.agents
+            assert manager.chats["chat1"]["session_id"] == "session-chat1"
+            assert manager.chats["chat2"]["session_id"] == "session-chat2"
+            assert send_text.await_count == 2
 
-        async def collect_response2(text: str):
-            responses2.append(text)
+    finally:
+        await manager.stop()
 
-        # 并发发送消息到两个 chat
-        await asyncio.gather(
-            manager.send_message('chat1', 'Hello from chat1', collect_response1),
-            manager.send_message('chat2', 'Hello from chat2', collect_response2),
-        )
 
-        # 验证两个 Agent 都已创建
-        assert len(manager.agents) == 2
-        assert 'chat1' in manager.agents
-        assert 'chat2' in manager.agents
+@pytest.mark.asyncio
+async def test_send_message_alias():
+    """send_message should remain as a compatibility alias."""
+    manager = ChatManager()
+    await manager.start()
 
-        # 验证两个 session_id 不同
-        session1 = manager.chats['chat1']['session_id']
-        session2 = manager.chats['chat2']['session_id']
-        assert session1 != session2
+    try:
+        with patch("src.bot.chat_manager.Agent", FakeAgent), patch(
+            "src.services.message_service.message_service.send_text_message",
+            new_callable=AsyncMock,
+        ) as send_text:
+            await manager.send_message("alias_chat", "msg-1", "Hello alias")
 
-        # 验证都收到响应
-        assert len(responses1) > 0
-        assert len(responses2) > 0
+            assert manager.chats["alias_chat"]["session_id"] == "session-alias_chat"
+            send_text.assert_awaited_once_with("alias_chat", "reply:Hello alias")
 
     finally:
         await manager.stop()
@@ -76,22 +124,21 @@ async def test_multiple_chats():
 
 @pytest.mark.asyncio
 async def test_interrupt():
-    """测试中断功能"""
+    """Interrupt should work for both missing and existing sessions."""
     manager = ChatManager()
     await manager.start()
 
     try:
-        # 没有 Agent 时中断
-        result = await manager.interrupt('nonexistent')
-        assert result == 'no_session'
+        with patch("src.bot.chat_manager.Agent", FakeAgent):
+            result = await manager.interrupt("nonexistent")
+            assert result == "no_session"
 
-        # 创建 Agent
-        agent, _ = manager.get_or_create_agent('chat1')
-        await agent.ensure_connected()
+            agent, _ = manager.get_or_create_agent("chat1")
+            await agent.ensure_connected()
 
-        # 中断（可能成功或超时，取决于是否有任务在运行）
-        result = await manager.interrupt('chat1')
-        assert result in ['success', 'timeout', 'error']
+            result = await manager.interrupt("chat1")
+            assert result == "success"
+            assert agent.interrupted is True
 
     finally:
         await manager.stop()
@@ -99,20 +146,20 @@ async def test_interrupt():
 
 @pytest.mark.asyncio
 async def test_reset_with_active_agent():
-    """测试重置活跃的 Agent"""
+    """Reset should destroy the active Agent and clear the session."""
     manager = ChatManager()
     await manager.start()
 
     try:
-        # 创建并连接 Agent
-        agent, _ = manager.get_or_create_agent('chat1')
-        await agent.ensure_connected()
+        with patch("src.bot.chat_manager.Agent", FakeAgent):
+            agent, _ = manager.get_or_create_agent("chat1")
+            await agent.ensure_connected()
 
-        # 重置
-        cwd = await manager.reset('chat1')
-        assert isinstance(cwd, str)
-        assert 'chat1' not in manager.agents
-        assert manager.chats['chat1']['session_id'] is None
+            cwd = await manager.reset("chat1")
+            assert isinstance(cwd, str)
+            assert "chat1" not in manager.agents
+            assert manager.chats["chat1"]["session_id"] is None
+            assert agent.destroyed is True
 
     finally:
         await manager.stop()
@@ -120,24 +167,22 @@ async def test_reset_with_active_agent():
 
 @pytest.mark.asyncio
 async def test_switch_cwd_with_active_agent():
-    """测试切换活跃 Agent 的工作目录"""
+    """Switching cwd should destroy the old Agent and reset the session."""
     manager = ChatManager()
     await manager.start()
 
     try:
-        # 创建并连接 Agent
-        agent, _ = manager.get_or_create_agent('chat1')
-        await agent.ensure_connected()
-        original_cwd = agent.cwd
+        with patch("src.bot.chat_manager.Agent", FakeAgent):
+            agent, _ = manager.get_or_create_agent("chat1")
+            await agent.ensure_connected()
 
-        # 切换目录
-        new_cwd = '/tmp/test'
-        await manager.switch_cwd('chat1', new_cwd)
+            new_cwd = "/tmp/test"
+            await manager.switch_cwd("chat1", new_cwd)
 
-        # 验证 Agent 被销毁
-        assert 'chat1' not in manager.agents
-        assert manager.chats['chat1']['cwd'] == new_cwd
-        assert manager.chats['chat1']['session_id'] is None
+            assert "chat1" not in manager.agents
+            assert manager.chats["chat1"]["cwd"] == new_cwd
+            assert manager.chats["chat1"]["session_id"] is None
+            assert agent.destroyed is True
 
     finally:
         await manager.stop()

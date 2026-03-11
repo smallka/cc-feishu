@@ -280,8 +280,8 @@ async def handle_message_internal(data: dict, start_time: float):
         # 获取或创建 agent，检查 session 变化
         agent, expected_session_id = chat_manager.get_or_create_agent(chat_id)
 
-        # 发送消息
-        await chat_manager.send_message(chat_id, message_id, text)
+        # Queue the message for asynchronous processing by the Agent.
+        await chat_manager.enqueue_message(chat_id, message_id, text)
 
         # 检查 session 是否变化（仅首次响应）
         chat_data = chat_manager.chats.get(chat_id, {})

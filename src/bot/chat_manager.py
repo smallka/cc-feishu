@@ -37,7 +37,7 @@ class ChatManager:
         self.agents: Dict[str, Agent] = {}  # chat_id -> Agent
         self.default_cwd = config.claude.work_root
         self.start_time = time.time()
-        self.response_complete_callback: Optional[Callable[[], None]] = None
+        self.message_enqueued_callback: Optional[Callable[[], None]] = None
 
     async def start(self):
         """启动 ChatManager"""
@@ -60,9 +60,13 @@ class ChatManager:
         self.agents.clear()
         logger.info('ChatManager stopped')
 
+    def on_message_enqueued(self, callback: Callable[[], None]):
+        """Register a callback fired after a user message is queued."""
+        self.message_enqueued_callback = callback
+
     def on_response_complete(self, callback: Callable[[], None]):
-        """注册响应完成回调"""
-        self.response_complete_callback = callback
+        """Backward-compatible alias for on_message_enqueued()."""
+        self.on_message_enqueued(callback)
 
     def get_or_create_agent(self, chat_id: str) -> tuple[Agent, str | None]:
         """
@@ -112,19 +116,28 @@ class ChatManager:
             })
             raise RuntimeError(f'创建 Agent 失败: {e}')
 
-    async def send_message(
+    async def enqueue_message(
         self,
         chat_id: str,
         message_id: str,
         text: str
     ):
         """
-        发送消息
+        Queue a user message for a chat.
+
+        This method only guarantees that:
+        - the Agent exists
+        - the message was accepted into the Agent queue
+        - chat metadata is updated if the Agent already has a session ID
+
+        It does not wait for Claude to finish processing, and it does not
+        guarantee that a reply or final session ID is available when the
+        coroutine returns.
 
         Args:
-            chat_id: 会话 ID
-            message_id: 消息 ID
-            text: 消息内容
+            chat_id: Chat ID
+            message_id: Message ID
+            text: Message content
         """
         agent, _ = self.get_or_create_agent(chat_id)
 
@@ -139,20 +152,29 @@ class ChatManager:
                 self.chats[chat_id]['session_id'] = agent.session_id
                 self.chats[chat_id]['cwd'] = agent.cwd
 
-            # 触发回调
-            if self.response_complete_callback:
-                self.response_complete_callback()
+            # Notify listeners that a message has been accepted for processing.
+            if self.message_enqueued_callback:
+                self.message_enqueued_callback()
 
         except asyncio.CancelledError:
             logger.info('Message processing cancelled', extra={'chat_id': chat_id})
             raise
 
         except Exception as e:
-            logger.error('Error in send_message', extra={
+            logger.error('Error in enqueue_message', extra={
                 'chat_id': chat_id,
                 'error': str(e)
             })
             raise
+
+    async def send_message(
+        self,
+        chat_id: str,
+        message_id: str,
+        text: str
+    ):
+        """Backward-compatible alias for enqueue_message()."""
+        await self.enqueue_message(chat_id, message_id, text)
 
     async def interrupt(self, chat_id: str) -> str:
         """尝试中断当前任务"""

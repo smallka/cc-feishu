@@ -1,45 +1,77 @@
-"""Agent 集成测试"""
-import pytest
+"""Agent flow tests with a fake Claude SDK client."""
 import asyncio
-from src.claude.agent import Agent
+from unittest.mock import patch
+
+import pytest
 from claude_agent_sdk import AssistantMessage, ResultMessage, TextBlock
+
+from src.claude.agent import Agent
+
+
+class FakeClaudeClient:
+    """Small SDK client stub for Agent tests."""
+
+    def __init__(self):
+        self.connected = False
+        self.disconnected = False
+        self.interrupted = False
+        self.queries: list[str] = []
+
+    async def connect(self):
+        self.connected = True
+
+    async def disconnect(self):
+        self.disconnected = True
+
+    async def interrupt(self):
+        self.interrupted = True
+
+    async def query(self, text: str):
+        self.queries.append(text)
+
+    async def receive_response(self):
+        yield AssistantMessage(content=[TextBlock(text="4")], model="fake-model")
+        yield ResultMessage(
+            subtype="success",
+            duration_ms=1,
+            duration_api_ms=1,
+            is_error=False,
+            num_turns=1,
+            session_id="session-123",
+            result="4",
+        )
 
 
 @pytest.mark.asyncio
 async def test_agent_send_message():
-    """测试 Agent 发送消息并接收响应"""
-    agent = Agent(
-        chat_id='test_chat',
-        cwd='/tmp',
-        resume_session_id=None
-    )
+    """Agent should process a queued message and invoke the callback."""
+    fake_client = FakeClaudeClient()
+    responses: list[str] = []
+    response_received = asyncio.Event()
 
-    await agent.ensure_connected()
+    async def on_response(text: str):
+        responses.append(text)
+        response_received.set()
 
-    # 发送简单消息
-    await agent.client.query("What is 2+2?")
+    with patch(
+        "src.claude.agent.ClaudeSDKClient",
+        side_effect=lambda *args, **kwargs: fake_client,
+    ):
+        agent = Agent(
+            chat_id="test_chat",
+            cwd="/tmp",
+            resume_session_id=None,
+            on_response=on_response,
+        )
 
-    # 接收响应
-    collected_text = []
-    session_id = None
+        await agent.send_message("msg-1", "What is 2+2?")
+        await asyncio.wait_for(response_received.wait(), timeout=1)
 
-    async for msg in agent.client.receive_response():
-        if isinstance(msg, AssistantMessage):
-            for block in msg.content:
-                if isinstance(block, TextBlock):
-                    collected_text.append(block.text)
-                    print(f"Received: {block.text}")
+        assert fake_client.connected is True
+        assert fake_client.queries == ["What is 2+2?"]
+        assert responses == ["4"]
+        assert agent.session_id == "session-123"
+        assert agent.is_busy() is False
 
-        elif isinstance(msg, ResultMessage):
-            session_id = msg.session_id
-            print(f"Session ID: {session_id}")
-            break
-
-    # 验证
-    assert len(collected_text) > 0
-    assert session_id is not None
-
-    # 更新 agent 的 session_id
-    agent.session_id = session_id
-
-    await agent.destroy()
+        await agent.destroy()
+        assert fake_client.disconnected is True

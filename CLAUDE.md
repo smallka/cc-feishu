@@ -67,7 +67,7 @@ src/
   ↓
   添加 Reaction (Typing)
   ↓
-  ChatManager.send_message(chat_id, message_id, text)
+  ChatManager.enqueue_message(chat_id, message_id, text)
   ↓
   Agent.send_message(message_id, text) [入队]
   ↓

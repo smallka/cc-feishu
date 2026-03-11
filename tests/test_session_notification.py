@@ -1,102 +1,118 @@
-"""测试 session 变化通知功能"""
-import pytest
-import asyncio
+"""Session notification tests at the message handler layer."""
 from unittest.mock import AsyncMock, MagicMock, patch
-from src.bot.chat_manager import ChatManager
+
+import pytest
+
+from src.handlers.message_handler import handle_message
+
+
+class FakeAgent:
+    """Agent stub for session notification tests."""
+
+    def __init__(self, cwd: str, actual_session_id: str):
+        self.cwd = cwd
+        self.session_id = None
+        self._actual_session_id = actual_session_id
+
+    def get_session_id(self):
+        return self._actual_session_id
+
+    def get_cwd(self):
+        return self.cwd
+
+
+class FakeChatManager:
+    """Small chat manager stub for handler-level notification checks."""
+
+    def __init__(self):
+        self.chats = {}
+        self.default_cwd = "/test/root"
+        self._agents = {}
+        self._actual_session_ids = {}
+
+    def prime_chat(
+        self,
+        chat_id: str,
+        *,
+        expected_session_id: str | None = None,
+        actual_session_id: str | None = None,
+        cwd: str = "/test/path",
+    ):
+        self.chats[chat_id] = {
+            "cwd": cwd,
+            "session_id": expected_session_id,
+            "session_notified": False,
+        }
+        self._actual_session_ids[chat_id] = actual_session_id or expected_session_id
+
+    def get_or_create_agent(self, chat_id: str):
+        if chat_id not in self.chats:
+            self.prime_chat(chat_id, actual_session_id=f"session-{chat_id}")
+
+        if chat_id not in self._agents:
+            chat = self.chats[chat_id]
+            actual_session_id = self._actual_session_ids[chat_id]
+            self._agents[chat_id] = FakeAgent(chat["cwd"], actual_session_id)
+
+        return self._agents[chat_id], self.chats[chat_id]["session_id"]
+
+    async def send_message(self, chat_id: str, message_id: str, text: str):
+        agent = self._agents[chat_id]
+        actual_session_id = self._actual_session_ids[chat_id]
+        agent.session_id = actual_session_id
+        self.chats[chat_id]["session_id"] = actual_session_id
+        self.chats[chat_id]["cwd"] = agent.cwd
+
+    async def enqueue_message(self, chat_id: str, message_id: str, text: str):
+        await self.send_message(chat_id, message_id, text)
+
+
+def make_message(chat_id: str, message_id: str, text: str) -> dict:
+    return {
+        "message": {
+            "message_id": message_id,
+            "chat_id": chat_id,
+            "message_type": "text",
+            "content": f'{{"text": "{text}"}}',
+        }
+    }
 
 
 @pytest.mark.asyncio
 async def test_session_notification():
-    """测试 session 变化通知"""
+    """Handler should notify on new sessions and failed resume only once."""
+    fake_manager = FakeChatManager()
+    service = MagicMock()
+    service.send_text_message = AsyncMock()
+    service.add_reaction = MagicMock(return_value="reaction-1")
+    service.remove_reaction = MagicMock()
 
-    # 创建 ChatManager
-    manager = ChatManager()
+    with patch("src.handlers.message_handler.chat_manager", fake_manager), patch(
+        "src.handlers.message_handler.message_service", service
+    ):
+        await handle_message(make_message("chat-1", "msg-1", "Hello"))
 
-    # Mock message_service
-    with patch('src.services.message_service.message_service') as mock_service:
-        mock_service.send_text_message = AsyncMock()
+        service.send_text_message.assert_awaited_once()
+        first_call = service.send_text_message.await_args.args
+        assert first_call[0] == "chat-1"
+        assert first_call[1].endswith("/test/path (session-chat-1)")
+        assert fake_manager.chats["chat-1"]["session_notified"] is True
 
-        # Mock Agent
-        with patch('src.bot.chat_manager.Agent') as MockAgent:
-            mock_agent = MagicMock()
-            mock_agent.client = True  # 模拟存活
-            mock_agent.get_session_id.return_value = 'new-session-123'
-            mock_agent.get_cwd.return_value = '/test/path'
-            mock_agent.session_id = 'new-session-123'
-            mock_agent.cwd = '/test/path'
+        service.send_text_message.reset_mock()
+        await handle_message(make_message("chat-1", "msg-2", "Hello again"))
+        service.send_text_message.assert_not_awaited()
 
-            # 模拟 send_message 调用回调
-            async def mock_send_message(text, callback):
-                await callback('AI response')
+        fake_manager.prime_chat(
+            "chat-2",
+            expected_session_id="old-session-456",
+            actual_session_id="new-session-789",
+        )
+        service.send_text_message.reset_mock()
 
-            mock_agent.send_message = mock_send_message
-            MockAgent.return_value = mock_agent
+        await handle_message(make_message("chat-2", "msg-3", "Resume test"))
 
-            # 场景 1: 首次创建会话（expected_session_id = None）
-            print("测试场景 1: 首次创建会话")
-            chat_id = 'test-chat-1'
-
-            user_response = []
-            async def capture_response(text):
-                user_response.append(text)
-
-            await manager.send_message(chat_id, 'Hello', capture_response)
-
-            # 验证通知
-            assert mock_service.send_text_message.called
-            call_args = mock_service.send_text_message.call_args
-            assert call_args[0][0] == chat_id
-            assert '新会话' in call_args[0][1]
-            assert 'new-session-123' in call_args[0][1]
-            print("[OK] 通知消息已发送（包含新会话和 session ID）")
-
-            # 验证用户响应
-            assert len(user_response) == 1
-            assert user_response[0] == 'AI response'
-            print("[OK] 用户收到响应")
-
-            # 验证 session_notified 标志
-            assert manager.chats[chat_id]['session_notified'] is True
-            print("[OK] session_notified 标志已设置")
-
-            # 场景 2: 第二次消息（不应再通知）
-            print("\n测试场景 2: 第二次消息（不应重复通知）")
-            mock_service.send_text_message.reset_mock()
-            user_response.clear()
-
-            await manager.send_message(chat_id, 'Hello again', capture_response)
-
-            # 验证不再通知
-            assert not mock_service.send_text_message.called
-            print("[OK] 未发送重复通知")
-
-            # 场景 3: 恢复失败（expected != actual）
-            print("\n测试场景 3: 恢复失败")
-            chat_id_2 = 'test-chat-2'
-
-            # 预设一个旧 session_id
-            manager.chats[chat_id_2] = {
-                'cwd': '/test/path',
-                'session_id': 'old-session-456',
-                'session_notified': False
-            }
-
-            # 创建新 Agent 时会尝试恢复 old-session-456
-            # 但实际返回 new-session-789
-            mock_agent.get_session_id.return_value = 'new-session-789'
-            mock_agent.session_id = 'new-session-789'
-
-            mock_service.send_text_message.reset_mock()
-            user_response.clear()
-
-            await manager.send_message(chat_id_2, 'Resume test', capture_response)
-
-            # 验证恢复失败通知
-            assert mock_service.send_text_message.called
-            call_args = mock_service.send_text_message.call_args
-            assert '恢复失败' in call_args[0][1]
-            assert 'new-session-789' in call_args[0][1]
-            print("[OK] 恢复失败通知已发送")
-
-            print("\n[OK] 所有测试通过！")
-
+        service.send_text_message.assert_awaited_once()
+        second_call = service.send_text_message.await_args.args
+        assert second_call[0] == "chat-2"
+        assert "恢复失败" in second_call[1]
+        assert second_call[1].endswith("/test/path (new-session-789)")

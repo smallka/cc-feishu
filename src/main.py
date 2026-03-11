@@ -1,94 +1,79 @@
-"""主入口"""
+"""Main entry point."""
 import asyncio
+import logging
 import signal
 import sys
-import logging
-from src.config import config
-from src.utils.logger import setup_logger
+
 from src.bot.chat_manager import chat_manager
 from src.bot.websocket import websocket_manager
+from src.config import config
 from src.handlers.message_handler import handle_message
+from src.utils.logger import setup_logger
 
 logger = logging.getLogger(__name__)
 
-# 全局标志，用于优雅关闭
 shutdown_event = asyncio.Event()
 
 
 def handle_signal(signum, frame):
-    """处理系统信号"""
-    logger.info('Received signal', extra={'signal': signum})
+    """Handle process signals."""
+    logger.info("Received signal", extra={"signal": signum})
     shutdown_event.set()
 
 
 async def main():
-    """主入口"""
-    # 注册信号处理器
+    """Run the application."""
     signal.signal(signal.SIGINT, handle_signal)
     signal.signal(signal.SIGTERM, handle_signal)
 
     try:
-        logger.info('Application starting', extra={
-            'config': {
-                'work_root': config.claude.work_root,
-                'model': config.claude.model,
-                'message_timeout': config.message_timeout
-            }
-        })
+        logger.info(
+            "Application starting",
+            extra={
+                "config": {
+                    "work_root": config.claude.work_root,
+                    "model": config.claude.model,
+                    "message_timeout": config.message_timeout,
+                }
+            },
+        )
 
-        # 启动 ChatManager
         await chat_manager.start()
 
-        # 启动 WebSocket（会阻塞到断开）
         websocket_task = asyncio.create_task(websocket_manager.start(handle_message))
         shutdown_task = asyncio.create_task(shutdown_event.wait())
 
-        # 等待 WebSocket 断开或收到关闭信号
         done, pending = await asyncio.wait(
             [websocket_task, shutdown_task],
-            return_when=asyncio.FIRST_COMPLETED
+            return_when=asyncio.FIRST_COMPLETED,
         )
 
-        # 取消未完成的任务
-        for task in pending:
-            task.cancel()
-            try:
-                await task
-            except asyncio.CancelledError:
-                pass
-
-        # 检查是哪个任务完成了
-        if websocket_task in done:
-            logger.error('WebSocket disconnected, exiting')
-            sys.exit(1)
+        if shutdown_task in done:
+            logger.info("Shutdown signal received, exiting gracefully")
+            await websocket_manager.stop()
+            await asyncio.gather(websocket_task, return_exceptions=True)
         else:
-            logger.info('Shutdown signal received, exiting gracefully')
+            await websocket_task
 
     except Exception as e:
-        logger.error('Fatal error', extra={'error': str(e)})
+        logger.error("Fatal error", extra={"error": str(e)})
         sys.exit(1)
     finally:
-        logger.info('Shutting down')
+        logger.info("Shutting down")
         await chat_manager.stop()
         await websocket_manager.stop()
 
-        # 等待所有任务完成，防止管道未关闭
         await asyncio.sleep(0.5)
 
-        logger.info('Application stopped')
+        logger.info("Application stopped")
 
 
-if __name__ == '__main__':
-    # 在 Windows 上抑制 ResourceWarning（管道关闭警告）
-    import warnings
+if __name__ == "__main__":
     import platform
-    if platform.system() == 'Windows':
-        warnings.filterwarnings('ignore', category=ResourceWarning)
+    import warnings
 
-    # 配置根 logger，这样所有子 logger 都会继承配置
-    logging.basicConfig(
-        level=getattr(logging, config.log_level.upper()),
-        format='%(asctime)s [%(levelname)s] %(name)s: %(message)s',
-        handlers=[logging.StreamHandler(sys.stdout)]
-    )
+    if platform.system() == "Windows":
+        warnings.filterwarnings("ignore", category=ResourceWarning)
+
+    setup_logger(config.log_level)
     asyncio.run(main())
