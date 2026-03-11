@@ -1,120 +1,162 @@
-import { readdirSync, openSync, readSync, closeSync, statSync } from 'fs';
+import { readdirSync, readFileSync, statSync, existsSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
+
 import logger from '../utils/logger';
 
 export interface SessionSummary {
   sessionId: string;
-  timestamp: string;
+  cwd: string;
+  filePath: string;
   firstMessage: string;
+  mtimeMs: number;
 }
 
 const PROJECTS_DIR = join(homedir(), '.claude', 'projects');
 
-/**
- * 将 cwd 路径转换为 Claude Code projects 目录名
- * e.g. C:\work\cc-feishu → c--work-cc-feishu
- */
 function cwdToProjectDir(cwd: string): string {
-  return cwd
-    .replace(/:/g, '-')
-    .replace(/[\\/]/g, '-')
-    .toLowerCase();
+  return cwd.replace(/:/g, '-').replace(/[\\/]/g, '-');
 }
 
-/**
- * 在 projects 目录中查找匹配的项目目录（大小写不敏感）
- */
-function findProjectDir(cwd: string): string | null {
-  const target = cwdToProjectDir(cwd);
-  try {
-    const dirs = readdirSync(PROJECTS_DIR);
-    const match = dirs.find(d => d.toLowerCase() === target);
-    return match ? join(PROJECTS_DIR, match) : null;
-  } catch {
-    return null;
-  }
+function projectDirToCwd(projectDirName: string): string {
+  return projectDirName.replace('-', ':').replace(/-/g, '\\');
 }
 
-/**
- * 从 .jsonl 文件中提取 session 摘要信息
- */
-function parseSessionFile(filePath: string): SessionSummary | null {
+function readFirstUserMessage(filePath: string): string | null {
   try {
-    const fd = openSync(filePath, 'r');
-    const buf = Buffer.alloc(8192);
-    const bytesRead = readSync(fd, buf, 0, 8192, 0);
-    closeSync(fd);
-    const content = buf.toString('utf-8', 0, bytesRead);
-    const lines = content.split('\n');
+    const content = readFileSync(filePath, 'utf-8');
+    for (const line of content.split('\n')) {
+      if (!line.trim()) {
+        continue;
+      }
 
-    let sessionId: string | undefined;
-    let timestamp: string | undefined;
-    let firstMessage: string | undefined;
-
-    for (const line of lines) {
-      if (!line.trim()) continue;
       try {
         const entry = JSON.parse(line);
-        if (entry.type === 'user' && entry.message?.role === 'user') {
-          sessionId = entry.sessionId;
-          timestamp = entry.timestamp;
-          const rawContent = entry.message.content;
-          let msg = '';
+        if (entry.type === 'user' && entry.message) {
+          const rawContent = entry.message.content ?? '';
+          let text = '';
+
           if (typeof rawContent === 'string') {
-            msg = rawContent;
+            text = rawContent;
           } else if (Array.isArray(rawContent)) {
-            // content 是 [{type: "text", text: "..."}] 数组格式
-            // 跳过 ide_opened_file 等系统标签，取第一条纯用户文本
             for (const block of rawContent) {
-              if (block.type === 'text' && block.text && !block.text.startsWith('<')) {
-                msg = block.text;
+              if (block?.type === 'text' && typeof block.text === 'string' && !block.text.startsWith('<')) {
+                text = block.text;
                 break;
               }
             }
           }
-          firstMessage = msg.length > 50 ? msg.slice(0, 50) + '...' : msg;
-          break;
-        }
-      } catch { /* skip malformed lines */ }
-    }
 
-    if (!sessionId || !timestamp) return null;
-    return { sessionId, timestamp, firstMessage: firstMessage || '(空)' };
-  } catch {
-    return null;
+          if (!text) {
+            continue;
+          }
+
+          return text.length > 50 ? `${text.slice(0, 50)}...` : text;
+        }
+      } catch {
+        continue;
+      }
+    }
+  } catch (error: any) {
+    logger.warn('[SessionScanner] Failed to read session file', {
+      filePath,
+      error: error.message,
+    });
   }
+
+  return null;
 }
 
-/**
- * 扫描指定 cwd 下的所有 Claude Code sessions，返回最近的 N 个
- */
-export function scanSessions(cwd: string, limit = 5): SessionSummary[] {
-  const projectDir = findProjectDir(cwd);
-  if (!projectDir) {
-    logger.debug('[SessionScanner] No project dir found for cwd', { cwd });
+function collectSessionsForDir(projectDir: string, cwd: string, limit: number): SessionSummary[] {
+  if (!existsSync(projectDir)) {
     return [];
   }
 
   try {
-    const files = readdirSync(projectDir)
-      .filter(f => f.endsWith('.jsonl'))
-      .map(f => ({
-        name: f,
-        path: join(projectDir, f),
-        mtime: statSync(join(projectDir, f)).mtimeMs,
-      }))
-      .sort((a, b) => b.mtime - a.mtime)
-      .slice(0, limit);
+    const sessionFiles = readdirSync(projectDir)
+      .filter(file => file.endsWith('.jsonl'))
+      .map(file => {
+        const filePath = join(projectDir, file);
+        return {
+          sessionId: file.replace(/\.jsonl$/, ''),
+          filePath,
+          mtimeMs: statSync(filePath).mtimeMs,
+        };
+      })
+      .sort((a, b) => b.mtimeMs - a.mtimeMs);
 
     const sessions: SessionSummary[] = [];
-    for (const file of files) {
-      const summary = parseSessionFile(file.path);
-      if (summary) sessions.push(summary);
+    for (const file of sessionFiles) {
+      if (sessions.length >= limit) {
+        break;
+      }
+
+      const firstMessage = readFirstUserMessage(file.filePath);
+      if (firstMessage === null) {
+        continue;
+      }
+
+      sessions.push({
+        sessionId: file.sessionId,
+        cwd,
+        filePath: file.filePath,
+        firstMessage,
+        mtimeMs: file.mtimeMs,
+      });
     }
+
     return sessions;
-  } catch (err: any) {
-    logger.error('[SessionScanner] Failed to scan sessions', { cwd, error: err.message });
+  } catch (error: any) {
+    logger.error('[SessionScanner] Failed to scan sessions', {
+      cwd,
+      error: error.message,
+    });
     return [];
   }
+}
+
+export function getValidSessions(cwd: string, defaultCwd: string, limitPerDir = 5): SessionSummary[] {
+  const normalizedCurrentDir = cwdToProjectDir(cwd);
+  const currentProjectDir = join(PROJECTS_DIR, normalizedCurrentDir);
+  const sessions = collectSessionsForDir(currentProjectDir, cwd, limitPerDir);
+
+  if (cwd !== defaultCwd || !existsSync(PROJECTS_DIR)) {
+    return sessions;
+  }
+
+  try {
+    const siblingDirs = readdirSync(PROJECTS_DIR, { withFileTypes: true })
+      .filter(entry => entry.isDirectory())
+      .filter(entry => entry.name !== normalizedCurrentDir)
+      .filter(entry => !entry.name.includes('Temp'))
+      .map(entry => {
+        const projectDir = join(PROJECTS_DIR, entry.name);
+        const latestSession = collectSessionsForDir(projectDir, projectDirToCwd(entry.name), 1)[0];
+        return latestSession ?? null;
+      })
+      .filter((session): session is SessionSummary => session !== null)
+      .sort((a, b) => b.mtimeMs - a.mtimeMs)
+      .slice(0, limitPerDir);
+
+    return sessions.concat(siblingDirs);
+  } catch (error: any) {
+    logger.error('[SessionScanner] Failed to scan sibling sessions', {
+      cwd,
+      error: error.message,
+    });
+    return sessions;
+  }
+}
+
+export function getSessionList(cwd: string, defaultCwd: string): Array<{ sessionId: string; cwd: string }> {
+  return getValidSessions(cwd, defaultCwd).map(session => ({
+    sessionId: session.sessionId,
+    cwd: session.cwd,
+  }));
+}
+
+export function sessionExists(cwd: string, sessionId: string): boolean {
+  const projectDir = join(PROJECTS_DIR, cwdToProjectDir(cwd));
+  const sessionFile = join(projectDir, `${sessionId}.jsonl`);
+  return existsSync(sessionFile);
 }

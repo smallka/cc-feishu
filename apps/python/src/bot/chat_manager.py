@@ -261,7 +261,7 @@ class ChatManager:
 
         if not agent:
             cwd = chat_data.get('cwd', self.default_cwd)
-            return f'当前没有活跃的会话\n工作目录: {cwd}'
+            return f'PY: 当前没有活跃的会话\n工作目录: {cwd}'
 
         session_id = agent.get_session_id() or '无'
         cwd = agent.get_cwd()
@@ -500,6 +500,9 @@ class ChatManager:
             '',
             '**会话列表**',
         ]
+
+        if not self.chats:
+            info.append('PY: 当前没有活跃的会话')
 
         for chat_id, data in self.chats.items():
             agent = self.agents.get(chat_id)

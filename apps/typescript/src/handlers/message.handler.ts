@@ -1,18 +1,15 @@
 import { existsSync, statSync } from 'fs';
 import { resolve, isAbsolute } from 'path';
+
 import logger from '../utils/logger';
 import { chatManager } from '../bot/chat-manager';
 import messageService from '../services/message.service';
 import config from '../config';
 
-// 消息去重：缓存已处理的 message_id
 const processedMessages = new Set<string>();
 const MAX_CACHE_SIZE = 500;
-
-// 表情队列：按顺序存储待移除的表情
 const reactionQueue: Array<{ messageId: string; reactionId: string }> = [];
 
-// 注册响应完成回调，按顺序移除表情
 chatManager.onResponseComplete(() => {
   const reaction = reactionQueue.shift();
   if (reaction) {
@@ -37,9 +34,7 @@ interface MessageEvent {
 }
 
 function resolveWorkPath(input: string): string | null {
-  const target = isAbsolute(input)
-    ? input
-    : resolve(config.claude.workRoot, input);
+  const target = isAbsolute(input) ? input : resolve(config.claude.workRoot, input);
   if (!existsSync(target) || !statSync(target).isDirectory()) {
     return null;
   }
@@ -50,7 +45,6 @@ export async function handleMessage(data: MessageEvent): Promise<void> {
   const startTime = Date.now();
   const { sender, message } = data;
 
-  // 消息去重
   if (processedMessages.has(message.message_id)) {
     logger.debug('Skipping duplicate message', { messageId: message.message_id });
     return;
@@ -58,7 +52,9 @@ export async function handleMessage(data: MessageEvent): Promise<void> {
   processedMessages.add(message.message_id);
   if (processedMessages.size > MAX_CACHE_SIZE) {
     const first = processedMessages.values().next().value;
-    if (first) processedMessages.delete(first);
+    if (first) {
+      processedMessages.delete(first);
+    }
   }
 
   logger.info('Processing message', {
@@ -67,7 +63,6 @@ export async function handleMessage(data: MessageEvent): Promise<void> {
     senderId: sender.sender_id.open_id,
   });
 
-  // 包装超时保护
   const timeout = config.claude.messageTimeout;
   const timeoutPromise = new Promise<never>((_, reject) => {
     setTimeout(() => {
@@ -92,7 +87,7 @@ export async function handleMessage(data: MessageEvent): Promise<void> {
 
       await messageService.sendTextMessage(
         message.chat_id,
-        `⚠️ 消息处理超时（${Math.round(timeout / 1000)}秒），已终止处理。请重试或使用 /new 重置会话。`
+        `消息处理超时（${Math.round(timeout / 1000)}秒），已终止处理。请重试或使用 /new 重置会话。`,
       ).catch(err => {
         logger.error('Failed to send timeout notification', { error: err });
       });
@@ -109,8 +104,11 @@ export async function handleMessage(data: MessageEvent): Promise<void> {
 
 async function handleMessageInternal(data: MessageEvent, startTime: number): Promise<void> {
   const { message } = data;
+  const timeout = config.claude.messageTimeout;
 
-  if (message.message_type !== 'text') return;
+  if (message.message_type !== 'text') {
+    return;
+  }
 
   let content: any;
   try {
@@ -121,11 +119,12 @@ async function handleMessageInternal(data: MessageEvent, startTime: number): Pro
   }
 
   const text = (content.text || '').trim();
-  if (!text) return;
+  if (!text) {
+    return;
+  }
 
   const chatId = message.chat_id;
 
-  // 命令处理
   if (text === '/help') {
     const helpText = [
       '可用命令:',
@@ -133,7 +132,9 @@ async function handleMessageInternal(data: MessageEvent, startTime: number): Pro
       '/new — 重置会话',
       '/stop — 打断任务',
       '/stat — 会话状态',
-      '/cd [路径] — 切换目录',
+      '/cd <路径> — 切换目录（/cd . 切换到根目录）',
+      '/resume — 列出 sessions',
+      '/resume <编号|session_id> — 恢复 session',
       '/debug — 系统调试信息',
     ].join('\n');
     await messageService.sendTextMessage(chatId, helpText);
@@ -141,20 +142,23 @@ async function handleMessageInternal(data: MessageEvent, startTime: number): Pro
   }
 
   if (text === '/stop') {
-    const result = chatManager.interrupt(chatId);
+    const result = await chatManager.interrupt(chatId);
+
     if (result === 'success') {
-      await messageService.sendTextMessage(chatId, '⏸️ 已发送打断指令，AI 将停止当前任务');
+      await messageService.sendTextMessage(chatId, '⏸️ 已发送中断信号，AI 将停止当前任务');
+    } else if (result === 'timeout') {
+      await messageService.sendTextMessage(chatId, '⚠️ 中断信号发送超时，请使用 /new 强制重置会话');
     } else if (result === 'no_session') {
       await messageService.sendTextMessage(chatId, '❌ 当前没有活跃的会话');
     } else {
-      await messageService.sendTextMessage(chatId, '⚠️ AI 当前未在执行任务，无需打断\n\n提示：只有在 AI 正在思考或执行工具时才能打断');
+      await messageService.sendTextMessage(chatId, '⚠️ 中断失败，请使用 /new 强制重置会话');
     }
     return;
   }
 
   if (text === '/new') {
     const cwd = await chatManager.reset(chatId);
-    await messageService.sendTextMessage(chatId, `会话已重置，可以开始新的对话。\n工作目录: ${cwd}`);
+    await messageService.sendTextMessage(chatId, `✅ 会话已重置，可以开始新的对话\n工作目录: ${cwd}`);
     return;
   }
 
@@ -171,32 +175,64 @@ async function handleMessageInternal(data: MessageEvent, startTime: number): Pro
   }
 
   if (text === '/cd') {
-    const defaultCwd = config.claude.workRoot;
-    await chatManager.switchCwd(chatId, defaultCwd);
-    await messageService.sendTextMessage(chatId, `已切换到默认工作目录:\n${defaultCwd}`);
+    await messageService.sendTextMessage(chatId, '用法: /cd <路径>\n使用 /cd . 切换到根目录');
     return;
   }
 
   if (text.startsWith('/cd ')) {
     const input = text.slice(4).trim();
-
-    const target = resolveWorkPath(input);
+    const target = input === '.' ? config.claude.workRoot : resolveWorkPath(input);
     if (!target) {
       await messageService.sendTextMessage(chatId, `目录不存在: ${input}`);
       return;
     }
     await chatManager.switchCwd(chatId, target);
-    await messageService.sendTextMessage(chatId, `工作目录已切换到: ${target}`);
+    await messageService.sendCardMessage(chatId, chatManager.listSessions(chatId));
     return;
   }
 
-  // 未知命令拦截
+  if (text === '/resume') {
+    await messageService.sendCardMessage(chatId, chatManager.listSessions(chatId));
+    return;
+  }
+
+  if (text.startsWith('/resume ')) {
+    const input = text.slice(8).trim();
+    if (!input) {
+      await messageService.sendCardMessage(chatId, chatManager.listSessions(chatId));
+      return;
+    }
+
+    if (/^\d+$/.test(input)) {
+      const index = Number(input);
+      if (index < 1) {
+        await messageService.sendTextMessage(chatId, '❌ 编号必须大于 0');
+        return;
+      }
+
+      const target = chatManager.resolveResumeTarget(chatId, index);
+      if (!target) {
+        const total = chatManager.getSessionCount(chatId);
+        await messageService.sendTextMessage(chatId, `❌ 编号超出范围（共 ${total} 个 session）\n使用 /resume 查看可用的 sessions`);
+        return;
+      }
+
+      await chatManager.switchCwd(chatId, target.cwd);
+      const result = await chatManager.resumeSession(chatId, target.sessionId);
+      await messageService.sendTextMessage(chatId, result);
+      return;
+    }
+
+    const result = await chatManager.resumeSession(chatId, input);
+    await messageService.sendTextMessage(chatId, result);
+    return;
+  }
+
   if (text.startsWith('/')) {
     await messageService.sendTextMessage(chatId, `未知命令: ${text.split(' ')[0]}\n输入 /help 查看可用命令。`);
     return;
   }
 
-  // 转发给 Claude Code
   const reactionId = await messageService.addReaction(message.message_id, 'Typing');
   if (reactionId) {
     reactionQueue.push({ messageId: message.message_id, reactionId });
@@ -204,9 +240,7 @@ async function handleMessageInternal(data: MessageEvent, startTime: number): Pro
 
   await chatManager.sendMessage(chatId, text);
 
-  // 记录处理时长
   const duration = Date.now() - startTime;
-  const timeout = config.claude.messageTimeout;
   if (duration > timeout * 0.5) {
     logger.warn('Message processing took long time', {
       messageId: message.message_id,

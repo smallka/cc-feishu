@@ -32,11 +32,9 @@ export class Agent {
       isResume: !!resumeSessionId,
     });
 
-    // 创建 launcher 和 bridge
     this.launcher = new CLILauncher(this.agentId);
     this.bridge = new CLIBridge(this.agentId, resumeSessionId);
 
-    // 设置 bridge 回调
     this.bridge.setOnResponse((text) => {
       logger.info('[Agent] Received response', {
         chatId: this.chatId,
@@ -48,13 +46,12 @@ export class Agent {
       }
     });
 
-    // 监听进程退出
     this.launcher.onExit((code) => {
       logger.info('[Agent] CLI process exited', {
         chatId: this.chatId,
         agentId: this.agentId,
         code,
-        wasDestroyed: this.destroyed
+        wasDestroyed: this.destroyed,
       });
 
       if (this.destroyed) {
@@ -65,10 +62,8 @@ export class Agent {
       this.destroy(error).catch(() => {});
     });
 
-    // 启动 CLI 进程
     this.launcher.start(cwd, resumeSessionId);
 
-    // 连接 bridge
     const process = this.launcher.getProcess();
     if (process) {
       this.bridge.attachProcess(process);
@@ -134,7 +129,6 @@ export class Agent {
       error: error?.message,
     });
 
-    // 如果有错误，触发 onError 回调
     if (error && this.onErrorCallback) {
       try {
         this.onErrorCallback(error);
@@ -146,13 +140,8 @@ export class Agent {
       }
     }
 
-    // 拒绝所有等待中的 init Promise
     this.bridge.rejectInit('Agent destroyed');
-
-    // 分离 bridge
     this.bridge.detachProcess();
-
-    // 杀掉进程
     await this.launcher.kill();
   }
 
@@ -166,6 +155,10 @@ export class Agent {
 
   getSessionId(): string | undefined {
     return this.bridge.getSessionId();
+  }
+
+  isInitialized(): boolean {
+    return this.bridge.isInitialized();
   }
 
   isAlive(): boolean {
