@@ -39,11 +39,13 @@ const sandboxRoot = mkdtempSync(join(tmpdir(), 'cc-feishu-session-scanner-'));
 const projectsDir = join(sandboxRoot, '.claude', 'projects');
 const defaultCwd = 'C:\\work\\cc-feishu';
 const siblingCwd = 'C:\\work\\my-project-alpha';
+const os = require('os') as typeof import('os') & { homedir: () => string };
+const originalHomedir = os.homedir;
 
 process.env.FEISHU_APP_ID = process.env.FEISHU_APP_ID || 'test-app-id';
 process.env.FEISHU_APP_SECRET = process.env.FEISHU_APP_SECRET || 'test-app-secret';
-process.env.CLAUDE_PROJECTS_DIR = projectsDir;
 mkdirSync(projectsDir, { recursive: true });
+os.homedir = () => sandboxRoot;
 
 const { getSessionList } = require('../src/claude/session-scanner') as typeof import('../src/claude/session-scanner');
 
@@ -66,6 +68,6 @@ try {
 
   console.log('session-scanner.test.ts passed');
 } finally {
-  delete process.env.CLAUDE_PROJECTS_DIR;
+  os.homedir = originalHomedir;
   rmSync(sandboxRoot, { recursive: true, force: true });
 }

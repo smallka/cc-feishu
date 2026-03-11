@@ -19,7 +19,7 @@ function cwdToProjectDir(cwd: string): string {
 }
 
 function getProjectsDir(): string {
-  return process.env.CLAUDE_PROJECTS_DIR || PROJECTS_DIR;
+  return PROJECTS_DIR;
 }
 
 interface SessionMetadata {
