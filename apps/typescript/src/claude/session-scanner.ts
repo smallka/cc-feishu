@@ -18,13 +18,21 @@ function cwdToProjectDir(cwd: string): string {
   return cwd.replace(/:/g, '-').replace(/[\\/]/g, '-');
 }
 
-function projectDirToCwd(projectDirName: string): string {
-  return projectDirName.replace('-', ':').replace(/-/g, '\\');
+function getProjectsDir(): string {
+  return process.env.CLAUDE_PROJECTS_DIR || PROJECTS_DIR;
 }
 
-function readFirstUserMessage(filePath: string): string | null {
+interface SessionMetadata {
+  cwd?: string;
+  firstMessage: string | null;
+}
+
+function readSessionMetadata(filePath: string): SessionMetadata | null {
   try {
     const content = readFileSync(filePath, 'utf-8');
+    let cwd: string | undefined;
+    let firstMessage: string | null = null;
+
     for (const line of content.split('\n')) {
       if (!line.trim()) {
         continue;
@@ -32,6 +40,10 @@ function readFirstUserMessage(filePath: string): string | null {
 
       try {
         const entry = JSON.parse(line);
+        if (!cwd && typeof entry.cwd === 'string' && entry.cwd.trim()) {
+          cwd = entry.cwd;
+        }
+
         if (entry.type === 'user' && entry.message) {
           const rawContent = entry.message.content ?? '';
           let text = '';
@@ -51,12 +63,18 @@ function readFirstUserMessage(filePath: string): string | null {
             continue;
           }
 
-          return text.length > 50 ? `${text.slice(0, 50)}...` : text;
+          firstMessage = text.length > 50 ? `${text.slice(0, 50)}...` : text;
+        }
+
+        if (cwd && firstMessage !== null) {
+          break;
         }
       } catch {
         continue;
       }
     }
+
+    return { cwd, firstMessage };
   } catch (error: any) {
     logger.warn('[SessionScanner] Failed to read session file', {
       filePath,
@@ -67,7 +85,7 @@ function readFirstUserMessage(filePath: string): string | null {
   return null;
 }
 
-function collectSessionsForDir(projectDir: string, cwd: string, limit: number): SessionSummary[] {
+function collectSessionsForDir(projectDir: string, fallbackCwd: string | undefined, limit: number): SessionSummary[] {
   if (!existsSync(projectDir)) {
     return [];
   }
@@ -91,8 +109,16 @@ function collectSessionsForDir(projectDir: string, cwd: string, limit: number): 
         break;
       }
 
-      const firstMessage = readFirstUserMessage(file.filePath);
-      if (firstMessage === null) {
+      const metadata = readSessionMetadata(file.filePath);
+      if (!metadata || metadata.firstMessage === null) {
+        continue;
+      }
+
+      const cwd = metadata.cwd ?? fallbackCwd;
+      if (!cwd) {
+        logger.warn('[SessionScanner] Skipping session without cwd metadata', {
+          filePath: file.filePath,
+        });
         continue;
       }
 
@@ -100,7 +126,7 @@ function collectSessionsForDir(projectDir: string, cwd: string, limit: number): 
         sessionId: file.sessionId,
         cwd,
         filePath: file.filePath,
-        firstMessage,
+        firstMessage: metadata.firstMessage,
         mtimeMs: file.mtimeMs,
       });
     }
@@ -108,7 +134,7 @@ function collectSessionsForDir(projectDir: string, cwd: string, limit: number): 
     return sessions;
   } catch (error: any) {
     logger.error('[SessionScanner] Failed to scan sessions', {
-      cwd,
+      cwd: fallbackCwd,
       error: error.message,
     });
     return [];
@@ -116,22 +142,23 @@ function collectSessionsForDir(projectDir: string, cwd: string, limit: number): 
 }
 
 export function getValidSessions(cwd: string, defaultCwd: string, limitPerDir = 5): SessionSummary[] {
+  const projectsDir = getProjectsDir();
   const normalizedCurrentDir = cwdToProjectDir(cwd);
-  const currentProjectDir = join(PROJECTS_DIR, normalizedCurrentDir);
+  const currentProjectDir = join(projectsDir, normalizedCurrentDir);
   const sessions = collectSessionsForDir(currentProjectDir, cwd, limitPerDir);
 
-  if (cwd !== defaultCwd || !existsSync(PROJECTS_DIR)) {
+  if (cwd !== defaultCwd || !existsSync(projectsDir)) {
     return sessions;
   }
 
   try {
-    const siblingDirs = readdirSync(PROJECTS_DIR, { withFileTypes: true })
+    const siblingDirs = readdirSync(projectsDir, { withFileTypes: true })
       .filter(entry => entry.isDirectory())
       .filter(entry => entry.name !== normalizedCurrentDir)
       .filter(entry => !entry.name.includes('Temp'))
       .map(entry => {
-        const projectDir = join(PROJECTS_DIR, entry.name);
-        const latestSession = collectSessionsForDir(projectDir, projectDirToCwd(entry.name), 1)[0];
+        const projectDir = join(projectsDir, entry.name);
+        const latestSession = collectSessionsForDir(projectDir, undefined, 1)[0];
         return latestSession ?? null;
       })
       .filter((session): session is SessionSummary => session !== null)
@@ -156,7 +183,7 @@ export function getSessionList(cwd: string, defaultCwd: string): Array<{ session
 }
 
 export function sessionExists(cwd: string, sessionId: string): boolean {
-  const projectDir = join(PROJECTS_DIR, cwdToProjectDir(cwd));
+  const projectDir = join(getProjectsDir(), cwdToProjectDir(cwd));
   const sessionFile = join(projectDir, `${sessionId}.jsonl`);
   return existsSync(sessionFile);
 }
