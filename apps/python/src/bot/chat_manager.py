@@ -1,6 +1,8 @@
 """ChatManager：管理 Chat → Agent 映射"""
 from typing import Dict, Optional, Callable, Awaitable
 import asyncio
+import json
+import os
 import time
 import logging
 from pathlib import Path
@@ -274,6 +276,42 @@ class ChatManager:
             f'- 运行时长: {format_duration(uptime)}'
         )
 
+    def _get_projects_root(self) -> Path:
+        projects_dir = os.getenv('CLAUDE_PROJECTS_DIR')
+        if projects_dir:
+            return Path(projects_dir)
+        return Path.home() / '.claude' / 'projects'
+
+    def _read_session_metadata(self, file: Path, session_id: str) -> tuple[str | None, str | None]:
+        cwd = None
+        first_message = None
+
+        try:
+            with open(file, 'r', encoding='utf-8') as f:
+                for line in f:
+                    try:
+                        entry = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+
+                    if cwd is None and isinstance(entry.get('cwd'), str) and entry['cwd'].strip():
+                        cwd = entry['cwd']
+
+                    if entry.get('type') == 'user' and 'message' in entry:
+                        content = entry['message'].get('content', '')
+                        if isinstance(content, str) and content:
+                            first_message = content[:50] + '...' if len(content) > 50 else content
+
+                    if cwd is not None and first_message is not None:
+                        break
+        except Exception as e:
+            logger.warning('Failed to read session file', extra={
+                'session_id': session_id,
+                'error': str(e)
+            })
+
+        return cwd, first_message
+
     def _get_valid_sessions(self, chat_id: str) -> list[tuple[str, str, Path]]:
         """
         获取有效的 session 列表（过滤空 session，按时间倒序）
@@ -286,7 +324,8 @@ class ChatManager:
         is_root = (cwd == self.default_cwd)
 
         normalized_path = str(Path(cwd).resolve()).replace(':', '-').replace('\\', '-').replace('/', '-')
-        projects_dir = Path.home() / '.claude' / 'projects' / normalized_path
+        projects_root = self._get_projects_root()
+        projects_dir = projects_root / normalized_path
 
         sessions = []
 
@@ -299,7 +338,7 @@ class ChatManager:
             for file in session_files:
                 if count >= 5:
                     break
-                first_message = self._read_first_message(file, file.stem)
+                _, first_message = self._read_session_metadata(file, file.stem)
                 if first_message is None:
                     continue
                 sessions.append((file.stem, cwd, file))
@@ -307,7 +346,6 @@ class ChatManager:
 
             # 如果在根目录，添加其他目录的 sessions
             if is_root:
-                projects_root = Path.home() / '.claude' / 'projects'
                 subdirs = []
 
                 for subdir in projects_root.iterdir():
@@ -321,13 +359,12 @@ class ChatManager:
                 subdirs = subdirs[:5]
 
                 for subdir, latest_file in subdirs:
-                    # 过滤空 session
-                    first_message = self._read_first_message(latest_file, latest_file.stem)
+                    session_cwd, first_message = self._read_session_metadata(latest_file, latest_file.stem)
                     if first_message is None:
                         continue
-                    # 解析回原始路径
-                    dir_name = subdir.name.replace('-', ':', 1).replace('-', '\\')
-                    sessions.append((latest_file.stem, dir_name, latest_file))
+                    if session_cwd is None:
+                        continue
+                    sessions.append((latest_file.stem, session_cwd, latest_file))
 
         return sessions
 
@@ -405,32 +442,8 @@ class ChatManager:
         return '\n'.join(lines)
 
     def _read_first_message(self, file: Path, session_id: str) -> str | None:
-        """读取 session 文件的第一条用户消息，返回 None 表示空 session"""
-        import json
-
-        first_message = None
-        try:
-            with open(file, 'r', encoding='utf-8') as f:
-                for line in f:
-                    try:
-                        entry = json.loads(line)
-                        # Claude Code session 格式：type="user", message.role="user", message.content
-                        if entry.get('type') == 'user' and 'message' in entry:
-                            content = entry['message'].get('content', '')
-                            # 截取前 50 个字符
-                            if len(content) > 50:
-                                first_message = content[:50] + '...'
-                            else:
-                                first_message = content
-                            break
-                    except json.JSONDecodeError:
-                        continue
-        except Exception as e:
-            logger.warning('Failed to read session file', extra={
-                'session_id': session_id,
-                'error': str(e)
-            })
-
+        """Read the first user message from a session file."""
+        _, first_message = self._read_session_metadata(file, session_id)
         return first_message
 
     def _get_session_list(self, chat_id: str) -> list[tuple[str, str]]:
@@ -451,7 +464,7 @@ class ChatManager:
 
         # 验证 session 是否存在
         normalized_path = str(Path(cwd).resolve()).replace(':', '-').replace('\\', '-').replace('/', '-')
-        projects_dir = Path.home() / '.claude' / 'projects' / normalized_path
+        projects_dir = self._get_projects_root() / normalized_path
         session_file = projects_dir / f'{session_id}.jsonl'
 
         if not session_file.exists():
