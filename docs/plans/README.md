@@ -9,7 +9,7 @@ Most documents in this directory were written before the repository was reorgani
 
 - Python paths like `src/...`, `tests/...`, `scripts/...`, `pyproject.toml`, `README.md`, and `INSTALL.md` now live under `apps/python/`.
 - TypeScript paths like `src/...`, `tests/...`, `package.json`, and TypeScript-specific docs now live under `apps/typescript/`.
-- TypeScript historical design notes are also preserved under `apps/typescript/docs/plans/`.
+- TypeScript historical design notes are preserved under `docs/plans/`.
 
 ## Intent
 
