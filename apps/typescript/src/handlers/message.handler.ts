@@ -1,5 +1,5 @@
-import { existsSync, statSync } from 'fs';
-import { resolve, isAbsolute } from 'path';
+﻿import { existsSync, statSync } from 'fs';
+import { isAbsolute, resolve } from 'path';
 
 import logger from '../utils/logger';
 import { chatManager } from '../bot/chat-manager';
@@ -41,6 +41,27 @@ function resolveWorkPath(input: string): string | null {
   return target;
 }
 
+function getHelpText(): string {
+  const lines = [
+    '可用命令:',
+    '/help - 显示帮助',
+    '/new - 重置会话',
+    '/stop - 打断当前任务',
+    '/stat - 查看会话状态',
+    '/cd <路径> - 切换工作目录，/cd . 回到根目录',
+    '/debug - 查看调试信息',
+  ];
+
+  if (chatManager.supportsSessionResume()) {
+    lines.push('/resume - 列出可恢复的 sessions');
+    lines.push('/resume <编号|session_id> - 恢复指定 session');
+  } else {
+    lines.push('/resume - 当前 provider 暂不支持');
+  }
+
+  return lines.join('\n');
+}
+
 export async function handleMessage(data: MessageEvent): Promise<void> {
   const startTime = Date.now();
   const { sender, message } = data;
@@ -61,6 +82,7 @@ export async function handleMessage(data: MessageEvent): Promise<void> {
     messageId: message.message_id,
     chatId: message.chat_id,
     senderId: sender.sender_id.open_id,
+    provider: chatManager.getProvider(),
   });
 
   const timeout = config.claude.messageTimeout;
@@ -110,9 +132,9 @@ async function handleMessageInternal(data: MessageEvent, startTime: number): Pro
     return;
   }
 
-  let content: any;
+  let content: { text?: string };
   try {
-    content = JSON.parse(message.content);
+    content = JSON.parse(message.content) as { text?: string };
   } catch (error) {
     logger.error('Failed to parse message content', { error });
     return;
@@ -125,19 +147,16 @@ async function handleMessageInternal(data: MessageEvent, startTime: number): Pro
 
   const chatId = message.chat_id;
 
+  logger.info('Received chat text', {
+    messageId: message.message_id,
+    chatId,
+    provider: chatManager.getProvider(),
+    text,
+    textLength: text.length,
+  });
+
   if (text === '/help') {
-    const helpText = [
-      '可用命令:',
-      '/help — 显示帮助',
-      '/new — 重置会话',
-      '/stop — 打断任务',
-      '/stat — 会话状态',
-      '/cd <路径> — 切换目录（/cd . 切换到根目录）',
-      '/resume — 列出 sessions',
-      '/resume <编号|session_id> — 恢复 session',
-      '/debug — 系统调试信息',
-    ].join('\n');
-    await messageService.sendTextMessage(chatId, helpText);
+    await messageService.sendTextMessage(chatId, getHelpText());
     return;
   }
 
@@ -145,20 +164,20 @@ async function handleMessageInternal(data: MessageEvent, startTime: number): Pro
     const result = await chatManager.interrupt(chatId);
 
     if (result === 'success') {
-      await messageService.sendTextMessage(chatId, '⏸️ 已发送中断信号，AI 将停止当前任务');
+      await messageService.sendTextMessage(chatId, '已发送中断信号，AI 将停止当前任务。');
     } else if (result === 'timeout') {
-      await messageService.sendTextMessage(chatId, '⚠️ 中断信号发送超时，请使用 /new 强制重置会话');
+      await messageService.sendTextMessage(chatId, '中断信号发送超时，请使用 /new 强制重置会话。');
     } else if (result === 'no_session') {
-      await messageService.sendTextMessage(chatId, '❌ 当前没有活跃的会话');
+      await messageService.sendTextMessage(chatId, '当前没有活跃会话。');
     } else {
-      await messageService.sendTextMessage(chatId, '⚠️ 中断失败，请使用 /new 强制重置会话');
+      await messageService.sendTextMessage(chatId, '中断失败，请使用 /new 强制重置会话。');
     }
     return;
   }
 
   if (text === '/new') {
     const cwd = await chatManager.reset(chatId);
-    await messageService.sendTextMessage(chatId, `✅ 会话已重置，可以开始新的对话\n工作目录: ${cwd}`);
+    await messageService.sendTextMessage(chatId, `会话已重置，可以开始新的对话。\n工作目录: ${cwd}`);
     return;
   }
 
@@ -186,8 +205,13 @@ async function handleMessageInternal(data: MessageEvent, startTime: number): Pro
       await messageService.sendTextMessage(chatId, `目录不存在: ${input}`);
       return;
     }
+
     await chatManager.switchCwd(chatId, target);
-    await messageService.sendCardMessage(chatId, chatManager.listSessions(chatId));
+    if (chatManager.supportsSessionResume()) {
+      await messageService.sendCardMessage(chatId, chatManager.listSessions(chatId));
+    } else {
+      await messageService.sendTextMessage(chatId, `已切换工作目录: ${target}`);
+    }
     return;
   }
 
@@ -197,6 +221,11 @@ async function handleMessageInternal(data: MessageEvent, startTime: number): Pro
   }
 
   if (text.startsWith('/resume ')) {
+    if (!chatManager.supportsSessionResume()) {
+      await messageService.sendTextMessage(chatId, chatManager.listSessions(chatId));
+      return;
+    }
+
     const input = text.slice(8).trim();
     if (!input) {
       await messageService.sendCardMessage(chatId, chatManager.listSessions(chatId));
@@ -206,14 +235,17 @@ async function handleMessageInternal(data: MessageEvent, startTime: number): Pro
     if (/^\d+$/.test(input)) {
       const index = Number(input);
       if (index < 1) {
-        await messageService.sendTextMessage(chatId, '❌ 编号必须大于 0');
+        await messageService.sendTextMessage(chatId, '编号必须大于 0。');
         return;
       }
 
       const target = chatManager.resolveResumeTarget(chatId, index);
       if (!target) {
         const total = chatManager.getSessionCount(chatId);
-        await messageService.sendTextMessage(chatId, `❌ 编号超出范围（共 ${total} 个 session）\n使用 /resume 查看可用的 sessions`);
+        await messageService.sendTextMessage(
+          chatId,
+          `编号超出范围（共 ${total} 个 session）。\n使用 /resume 查看可用的 sessions。`,
+        );
         return;
       }
 
@@ -250,3 +282,5 @@ async function handleMessageInternal(data: MessageEvent, startTime: number): Pro
     });
   }
 }
+
+

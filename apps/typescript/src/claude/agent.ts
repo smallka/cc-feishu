@@ -38,6 +38,7 @@ export class Agent implements ChatAgent {
         chatId: this.chatId,
         agentId: this.agentId,
         textLength: text.length,
+        responseText: text,
       });
       if (this.onResponseCallback) {
         this.onResponseCallback(text);
@@ -84,6 +85,7 @@ export class Agent implements ChatAgent {
       chatId: this.chatId,
       agentId: this.agentId,
       messageLength: text.length,
+      messageText: text,
     });
 
     try {
@@ -179,3 +181,5 @@ export class Agent implements ChatAgent {
     return this.launcher.getProcess()?.pid;
   }
 }
+
+

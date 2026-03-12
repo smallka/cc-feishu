@@ -1,4 +1,5 @@
-﻿import { ThreadLike, loadCodexSdk } from './loader';
+import { ThreadLike, loadCodexSdk } from './loader';
+import logger from '../utils/logger';
 
 export interface CodexMinimalSessionOptions {
   workingDirectory: string;
@@ -41,8 +42,19 @@ export class CodexMinimalSession {
 
   async sendMessage(text: string): Promise<SendMessageResult> {
     if (this.inFlightPromise) {
+      logger.warn('[CodexMinimalSession] Rejecting concurrent turn', {
+        workingDirectory: this.workingDirectory,
+        threadId: this.getThreadId(),
+      });
       throw new ConcurrentTurnError();
     }
+
+    logger.info('[CodexMinimalSession] Sending message', {
+      workingDirectory: this.workingDirectory,
+      threadId: this.getThreadId(),
+      messageLength: text.length,
+      messageText: text,
+    });
 
     const runPromise = this.runTurn(text);
     this.inFlightPromise = runPromise;
@@ -58,9 +70,17 @@ export class CodexMinimalSession {
 
   interrupt(): boolean {
     if (!this.abortController) {
+      logger.warn('[CodexMinimalSession] No running turn to interrupt', {
+        workingDirectory: this.workingDirectory,
+        threadId: this.getThreadId(),
+      });
       return false;
     }
 
+    logger.info('[CodexMinimalSession] Aborting current turn', {
+      workingDirectory: this.workingDirectory,
+      threadId: this.getThreadId(),
+    });
     this.abortController.abort('Interrupted by caller.');
     return true;
   }
@@ -78,16 +98,39 @@ export class CodexMinimalSession {
     const abortController = new AbortController();
     this.abortController = abortController;
 
+    logger.info('[CodexMinimalSession] Starting thread.run', {
+      workingDirectory: this.workingDirectory,
+      threadId: thread.id,
+      messageLength: text.length,
+      messageText: text,
+    });
+
     try {
       const result = await thread.run(text, { signal: abortController.signal });
+      logger.info('[CodexMinimalSession] Completed thread.run', {
+        workingDirectory: this.workingDirectory,
+        threadId: thread.id,
+        textLength: result.finalResponse.length,
+        responseText: result.finalResponse,
+        usage: result.usage,
+      });
       return {
         text: result.finalResponse,
         threadId: thread.id,
       };
     } catch (error) {
       if (abortController.signal.aborted || isAbortError(error)) {
+        logger.info('[CodexMinimalSession] thread.run aborted', {
+          workingDirectory: this.workingDirectory,
+          threadId: thread.id,
+        });
         throw new TurnAbortedError();
       }
+      logger.error('[CodexMinimalSession] thread.run failed', {
+        workingDirectory: this.workingDirectory,
+        threadId: thread.id,
+        error,
+      });
       throw error;
     } finally {
       if (this.abortController === abortController) {
@@ -98,6 +141,10 @@ export class CodexMinimalSession {
 
   private async ensureThread(): Promise<ThreadLike> {
     if (this.thread) {
+      logger.info('[CodexMinimalSession] Reusing existing thread', {
+        workingDirectory: this.workingDirectory,
+        threadId: this.thread.id,
+      });
       return this.thread;
     }
 
@@ -110,6 +157,14 @@ export class CodexMinimalSession {
     this.thread = client.startThread({
       workingDirectory: this.workingDirectory,
       skipGitRepoCheck: true,
+    });
+
+    logger.info('[CodexMinimalSession] Started thread', {
+      workingDirectory: this.workingDirectory,
+      threadId: this.thread.id,
+      skipGitRepoCheck: true,
+      codexPathOverride: this.codexPathOverride,
+      codexArgsPrefix: this.codexArgsPrefix,
     });
 
     return this.thread;

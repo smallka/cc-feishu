@@ -1,5 +1,6 @@
-﻿import path from 'node:path';
+import path from 'node:path';
 import { pathToFileURL } from 'node:url';
+import logger from '../utils/logger';
 
 export interface ThreadRunResult {
   items: unknown[];
@@ -46,6 +47,7 @@ export async function loadCodexSdk(): Promise<CodexSdkModule> {
     const dynamicImport = new Function('specifier', 'return import(specifier);') as (
       specifier: string,
     ) => Promise<CodexSdkModule>;
+    logger.info('[CodexSdkLoader] Loading vendored Codex SDK', { entryUrl });
     sdkPromise = dynamicImport(entryUrl);
   }
 

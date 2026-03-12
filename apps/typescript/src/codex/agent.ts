@@ -1,4 +1,4 @@
-﻿import logger from '../utils/logger';
+import logger from '../utils/logger';
 import type { ChatAgent, OnErrorCallback, OnResponseCallback } from '../agent/types';
 import {
   CodexMinimalSession,
@@ -37,6 +37,8 @@ export class CodexAgent implements ChatAgent {
       chatId,
       agentId: this.agentId,
       cwd,
+      codexPathOverride: launchConfig.executablePath,
+      codexArgsPrefix: launchConfig.argsPrefix,
       requestedResumeSessionId: resumeSessionId,
       resumeSupported: false,
     });
@@ -55,6 +57,7 @@ export class CodexAgent implements ChatAgent {
       chatId: this.chatId,
       agentId: this.agentId,
       messageLength: text.length,
+      messageText: text,
     });
 
     try {
@@ -65,6 +68,7 @@ export class CodexAgent implements ChatAgent {
         agentId: this.agentId,
         threadId: result.threadId,
         textLength: result.text.length,
+        responseText: result.text,
       });
       this.onResponseCallback?.(result.text);
     } catch (error) {
@@ -165,3 +169,5 @@ export class CodexAgent implements ChatAgent {
     return this.startTime;
   }
 }
+
+

@@ -78,7 +78,11 @@ class MessageService {
         },
       });
 
-      logger.info('Card message sent', { chatId, contentLength: markdown.length });
+      logger.info('Card message sent', {
+        chatId,
+        contentLength: markdown.length,
+        markdown,
+      });
     } catch (error) {
       logger.error('Failed to send card message', { error, chatId });
       throw error;

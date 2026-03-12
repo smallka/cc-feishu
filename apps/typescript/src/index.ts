@@ -8,6 +8,7 @@ async function bootstrap() {
     logger.info('Starting Feishu bot application', {
       env: config.app.env,
       appId: config.feishu.appId,
+      provider: config.agent.provider,
     });
 
     // 启动 ChatManager

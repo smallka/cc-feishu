@@ -122,6 +122,12 @@ export class CLIBridge {
     });
     this.collectedText = [];
     this.onComplete = onComplete || null;
+    logger.info('[CLIBridge] Sending user message', {
+      agentId: this.agentId,
+      sessionId: this.sessionId,
+      messageLength: text.length,
+      messageText: text,
+    });
     this.sendRaw(ndjson);
   }
 
@@ -220,6 +226,12 @@ export class CLIBridge {
   private handleResult() {
     const text = this.collectedText.join('\n').trim();
     this.collectedText = [];
+    logger.info('[CLIBridge] Completed assistant turn', {
+      agentId: this.agentId,
+      sessionId: this.sessionId,
+      textLength: text.length,
+      responseText: text,
+    });
     if (text && this.onResponse) {
       this.onResponse(text);
     }
