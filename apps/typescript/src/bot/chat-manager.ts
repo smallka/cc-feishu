@@ -1,7 +1,13 @@
-import logger from '../utils/logger';
+﻿import logger from '../utils/logger';
 import messageService from '../services/message.service';
-import { Agent } from '../claude/agent';
-import { getSessionList, getValidSessions, sessionExists, SessionSummary } from '../claude/session-scanner';
+import { createAgent } from '../agent/factory';
+import type { ChatAgent } from '../agent/types';
+import {
+  getSessionList,
+  getValidSessions,
+  sessionExists,
+  type SessionSummary,
+} from '../claude/session-scanner';
 import config from '../config';
 
 interface ChatData {
@@ -36,11 +42,11 @@ function formatDuration(seconds: number): string {
 }
 
 export class ChatManager {
-  private chats: Map<string, ChatData> = new Map();
-  private agents = new Map<string, Agent>();
-  private defaultCwd: string;
+  private chats = new Map<string, ChatData>();
+  private agents = new Map<string, ChatAgent>();
+  private readonly defaultCwd: string;
   private responseCompleteCallback: (() => void) | null = null;
-  private startTime: number;
+  private readonly startTime: number;
 
   constructor() {
     this.defaultCwd = config.claude.workRoot;
@@ -92,36 +98,13 @@ export class ChatManager {
       return;
     }
 
-    const agent = this.agents.get(chatId);
-    if (agent) {
-      try {
-        await agent.destroy();
-      } catch (error: any) {
-        logger.error('[ChatManager] Error destroying agent when switching cwd', {
-          chatId,
-          error: error.message,
-        });
-      }
-      this.agents.delete(chatId);
-    }
-
+    await this.destroyAgent(chatId, 'switching cwd');
     this.chats.set(chatId, { cwd: newCwd, sessionId: undefined, sessionNotified: false });
     logger.info('[ChatManager] Switched cwd', { chatId, oldCwd: currentCwd, newCwd });
   }
 
   async reset(chatId: string): Promise<string> {
-    const agent = this.agents.get(chatId);
-    if (agent) {
-      try {
-        await agent.destroy();
-      } catch (error: any) {
-        logger.error('[ChatManager] Error destroying agent on reset', {
-          chatId,
-          error: error.message,
-        });
-      }
-      this.agents.delete(chatId);
-    }
+    await this.destroyAgent(chatId, 'reset');
 
     const cwd = this.chats.get(chatId)?.cwd ?? this.defaultCwd;
     this.chats.set(chatId, { cwd, sessionId: undefined, sessionNotified: false });
@@ -135,19 +118,19 @@ export class ChatManager {
 
     if (!agent) {
       const cwd = data?.cwd ?? this.defaultCwd;
-      return `TS: 当前没有活跃的会话\n工作目录: ${cwd}`;
+      return `当前没有活跃会话\n工作目录: ${cwd}`;
     }
 
     const sessionId = agent.getSessionId() || '无';
     const cwd = agent.getCwd();
     const uptime = (Date.now() - agent.getStartTime()) / 1000;
 
-    return (
-      `会话信息:\n`
-      + `- Session ID: ${sessionId.slice(0, 16)}...\n`
-      + `- 工作目录: ${cwd}\n`
-      + `- 运行时长: ${formatDuration(uptime)}`
-    );
+    return [
+      '会话信息:',
+      `- Session ID: ${sessionId === '无' ? sessionId : `${sessionId.slice(0, 16)}...`}`,
+      `- 工作目录: ${cwd}`,
+      `- 运行时长: ${formatDuration(uptime)}`,
+    ].join('\n');
   }
 
   listSessions(chatId: string): string {
@@ -164,10 +147,10 @@ export class ChatManager {
     const lines: string[] = [];
 
     if (isRoot) {
-      lines.push('**📋 Sessions (根目录)**');
+      lines.push('**Sessions（根目录）**');
       lines.push(`工作目录: \`${cwd}\``);
       lines.push('');
-      lines.push('**当前目录最新 5 个:**');
+      lines.push('**当前目录最近 5 条**');
       lines.push('');
 
       let currentDirCount = 0;
@@ -179,30 +162,30 @@ export class ChatManager {
 
         currentDirCount = index + 1;
         lines.push(this.formatSessionLine(index + 1, session, currentSession));
-        lines.push(`💬 ${session.firstMessage}`);
+        lines.push(`摘要 ${session.firstMessage}`);
         lines.push('');
       }
 
       if (currentDirCount < sessions.length) {
-        lines.push('**其他目录最新:**');
+        lines.push('**其他目录最近会话**');
         lines.push('');
 
         for (let index = currentDirCount; index < sessions.length; index += 1) {
           const session = sessions[index];
           lines.push(`**${index + 1}.** \`${session.cwd}\``);
-          lines.push(`   \`${session.sessionId.slice(0, 8)}...\`  ⏰ ${formatDuration((Date.now() - session.mtimeMs) / 1000)}前`);
-          lines.push(`   💬 ${session.firstMessage}`);
+          lines.push(`   \`${session.sessionId.slice(0, 8)}...\`  ${formatDuration((Date.now() - session.mtimeMs) / 1000)}前`);
+          lines.push(`   摘要 ${session.firstMessage}`);
           lines.push('');
         }
       }
     } else {
-      lines.push(`**📋 Sessions (${sessions.length} 个)**`);
+      lines.push(`**Sessions（${sessions.length} 条）**`);
       lines.push(`工作目录: \`${cwd}\``);
       lines.push('');
 
       sessions.forEach((session, index) => {
         lines.push(this.formatSessionLine(index + 1, session, currentSession));
-        lines.push(`💬 ${session.firstMessage}`);
+        lines.push(`摘要 ${session.firstMessage}`);
         lines.push('');
       });
     }
@@ -233,19 +216,7 @@ export class ChatManager {
       return `❌ Session 不存在: ${sessionId}\n使用 /resume 查看可用的 sessions`;
     }
 
-    const agent = this.agents.get(chatId);
-    if (agent) {
-      try {
-        await agent.destroy();
-      } catch (error: any) {
-        logger.error('[ChatManager] Error destroying agent when resuming session', {
-          chatId,
-          error: error.message,
-        });
-      }
-      this.agents.delete(chatId);
-    }
-
+    await this.destroyAgent(chatId, 'resuming session');
     this.chats.set(chatId, {
       cwd,
       sessionId,
@@ -268,13 +239,13 @@ export class ChatManager {
     ];
 
     if (this.chats.size === 0) {
-      info.push('TS: 当前没有活跃的会话');
+      info.push('当前没有活跃会话');
     }
 
     for (const [chatId, data] of this.chats) {
       const agent = this.agents.get(chatId);
       let sessionId = data.sessionId || '无';
-      if (sessionId && sessionId !== '无') {
+      if (sessionId !== '无') {
         sessionId = `${sessionId.slice(0, 8)}...`;
       }
 
@@ -292,7 +263,7 @@ export class ChatManager {
       } else {
         info.push(
           `- Chat: \`${chatId.slice(0, 8)}...\`\n`
-          + `  - Agent: 未启动\n`
+          + '  - Agent: 未启动\n'
           + `  - Session: \`${sessionId}\`\n`
           + `  - CWD: \`${data.cwd}\``,
         );
@@ -302,7 +273,15 @@ export class ChatManager {
     return info.join('\n');
   }
 
-  private getOrCreateAgent(chatId: string): Agent {
+  async stop(): Promise<void> {
+    for (const agent of this.agents.values()) {
+      await agent.destroy();
+    }
+    this.agents.clear();
+    logger.info('[ChatManager] Stopped');
+  }
+
+  private getOrCreateAgent(chatId: string): ChatAgent {
     let agent = this.agents.get(chatId);
     if (agent?.isAlive()) {
       logger.debug('[ChatManager] Reusing existing agent', {
@@ -335,7 +314,11 @@ export class ChatManager {
       willResume: !!resumeSessionId,
     });
 
-    agent = new Agent(chatId, cwd, resumeSessionId);
+    agent = createAgent({
+      chatId,
+      cwd,
+      resumeSessionId,
+    });
     this.agents.set(chatId, agent);
 
     const expectedSessionId = agent.getSessionId();
@@ -350,9 +333,9 @@ export class ChatManager {
         if (sessionChanged || !resumeSessionId) {
           let message = '';
           if (!resumeSessionId) {
-            message = `🆕 新会话: ${cwd} (${actualSessionId})`;
+            message = `新会话已创建: ${cwd} (${actualSessionId ?? 'pending'})`;
           } else if (sessionChanged) {
-            message = `⚠️ 恢复失败，已创建新会话: ${cwd} (${actualSessionId})`;
+            message = `恢复失败，已创建新会话: ${cwd} (${actualSessionId ?? 'pending'})`;
           }
 
           if (message) {
@@ -360,7 +343,11 @@ export class ChatManager {
           }
         }
 
-        this.chats.set(chatId, { ...currentData, sessionNotified: true, sessionId: actualSessionId });
+        this.chats.set(chatId, {
+          ...currentData,
+          sessionNotified: true,
+          sessionId: actualSessionId,
+        });
       }
 
       logger.debug('[ChatManager] Agent response received', {
@@ -369,9 +356,7 @@ export class ChatManager {
         textLength: text.length,
       });
       this.sendResponse(chatId, text);
-      if (this.responseCompleteCallback) {
-        this.responseCompleteCallback();
-      }
+      this.responseCompleteCallback?.();
     });
 
     agent.onError((error) => {
@@ -380,7 +365,6 @@ export class ChatManager {
     });
 
     this.chats.set(chatId, { cwd, sessionId: agent.getSessionId(), sessionNotified: false });
-
     return agent;
   }
 
@@ -393,9 +377,9 @@ export class ChatManager {
   }
 
   private formatSessionLine(index: number, session: SessionSummary, currentSession?: string): string {
-    const marker = session.sessionId === currentSession ? ' 🔵' : '';
+    const marker = session.sessionId === currentSession ? ' 当前' : '';
     const age = formatDuration((Date.now() - session.mtimeMs) / 1000);
-    return `**${index}.** \`${session.sessionId.slice(0, 8)}...\`${marker}  ⏰ ${age}前`;
+    return `**${index}.** \`${session.sessionId.slice(0, 8)}...\`${marker}  ${age}前`;
   }
 
   private sendResponse(chatId: string, text: string): void {
@@ -406,12 +390,15 @@ export class ChatManager {
       }).catch(err => {
         logger.error('[ChatManager] Failed to send response', { chatId, error: err.message });
       });
-    } else {
-      this.sendLongMessage(chatId, text, maxLen);
+      return;
     }
+
+    this.sendLongMessage(chatId, text, maxLen).catch(err => {
+      logger.error('[ChatManager] Failed to send long response', { chatId, error: err.message });
+    });
   }
 
-  private async sendLongMessage(chatId: string, text: string, maxLen: number) {
+  private async sendLongMessage(chatId: string, text: string, maxLen: number): Promise<void> {
     for (let i = 0; i < text.length; i += maxLen) {
       const chunk = text.slice(i, i + maxLen);
       try {
@@ -422,12 +409,21 @@ export class ChatManager {
     }
   }
 
-  async stop(): Promise<void> {
-    for (const agent of this.agents.values()) {
-      await agent.destroy();
+  private async destroyAgent(chatId: string, reason: string): Promise<void> {
+    const agent = this.agents.get(chatId);
+    if (!agent) {
+      return;
     }
-    this.agents.clear();
-    logger.info('[ChatManager] Stopped');
+
+    try {
+      await agent.destroy();
+    } catch (error: any) {
+      logger.error(`[ChatManager] Error destroying agent while ${reason}`, {
+        chatId,
+        error: error.message,
+      });
+    }
+    this.agents.delete(chatId);
   }
 }
 

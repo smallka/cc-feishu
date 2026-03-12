@@ -1,13 +1,11 @@
-import logger from '../utils/logger';
+﻿import logger from '../utils/logger';
+import type { ChatAgent, OnErrorCallback, OnResponseCallback } from '../agent/types';
 import { CLILauncher } from './launcher';
 import { CLIBridge } from './bridge';
 
-export type OnResponseCallback = (text: string) => void;
-export type OnErrorCallback = (error: Error) => void;
-
 let agentCounter = 0;
 
-export class Agent {
+export class Agent implements ChatAgent {
   private readonly agentId: string;
   private readonly chatId: string;
   private readonly cwd: string;

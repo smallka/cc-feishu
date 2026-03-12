@@ -1,0 +1,11 @@
+﻿{
+  "name": "@openai/codex-sdk",
+  "version": "0.0.0-prototype",
+  "type": "module",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js"
+    }
+  },
+  "sideEffects": false
+}
