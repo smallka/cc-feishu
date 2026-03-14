@@ -1,16 +1,16 @@
-# cc-feishu TypeScript App
+﻿# cc-feishu TypeScript 应用
 
-This is the restored TypeScript implementation from the `typescript-final` tag.
+基于 TypeScript 的飞书机器人实现，使用 WebSocket 长连接接收消息，并将消息转发给本地 Agent 处理。
 
-## When to use it
+## 适用场景
 
-Use this app if you want:
+适合以下情况：
 
-- the original Node.js implementation
-- a codebase that is already aligned with `Node.js >= 18`
-- the most natural base for a future `@openai/codex-sdk` integration
+- 需要使用原始的 Node.js / TypeScript 实现
+- 运行环境已经对齐 `Node.js >= 18`
+- 需要继续扩展 Codex 或 Claude 相关能力
 
-## Quick start
+## 快速开始
 
 ```bash
 npm install
@@ -18,9 +18,9 @@ cp .env.example .env
 npm run dev
 ```
 
-## Main paths
+## 主要目录
 
-- [`src`](./src) - application source
-- [`INSTALL.md`](./INSTALL.md) - setup and deployment notes
-- [`CLAUDE.md`](./CLAUDE.md) - implementation notes for this app
-- [`docs`](./docs) - TypeScript-specific protocol and design notes
+- [`src`](./src) - 应用源码
+- [`INSTALL.md`](./INSTALL.md) - 安装、配置与启动说明
+- [`CLAUDE.md`](./CLAUDE.md) - 实现说明
+- [`docs`](./docs) - TypeScript 相关协议和设计文档

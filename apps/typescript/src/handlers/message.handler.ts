@@ -12,6 +12,8 @@ const queuedMessages = new Map<string, QueuedMessageTask[]>();
 const activeProcessors = new Map<string, Promise<void>>();
 let acceptingMessages = true;
 const SUPPORTED_PROVIDERS: AgentProvider[] = ['claude', 'codex'];
+const MESSAGE_TIMEOUT_MS = 300000;
+const MESSAGE_TIMEOUT_ACTION: 'notify' | 'kill' = 'notify';
 
 interface MessageEvent {
   sender: {
@@ -273,7 +275,7 @@ async function processQueuedMessage(task: QueuedMessageTask): Promise<void> {
   const { data } = task;
   const { sender, message } = data;
   const startTime = Date.now();
-  const timeout = config.claude.messageTimeout;
+  const timeout = MESSAGE_TIMEOUT_MS;
   const queueDelay = startTime - task.enqueuedAt;
 
   logger.info('Processing queued message', {
@@ -308,7 +310,7 @@ async function processQueuedMessage(task: QueuedMessageTask): Promise<void> {
       timeout,
     });
 
-    if (config.claude.messageTimeoutAction === 'kill') {
+    if (MESSAGE_TIMEOUT_ACTION === 'kill') {
       await messageService.sendTextMessage(
         message.chat_id,
         `消息处理超时（${Math.round(timeout / 1000)}秒），已终止当前任务。请重试或使用 /new 重置会话。`,
@@ -354,7 +356,7 @@ async function handleMessageInternal(task: QueuedMessageTask, startTime: number)
   const { data, text } = task;
   const { message } = data;
   const chatId = message.chat_id;
-  const timeout = config.claude.messageTimeout;
+  const timeout = MESSAGE_TIMEOUT_MS;
 
   logger.info('Received chat text', {
     messageId: message.message_id,
@@ -522,3 +524,4 @@ async function handleMessageInternal(task: QueuedMessageTask, startTime: number)
     });
   }
 }
+

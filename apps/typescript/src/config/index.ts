@@ -15,12 +15,11 @@ interface Config {
   claude: {
     workRoot: string;
     model: string;
-    messageTimeout: number;
-    messageTimeoutAction: 'notify' | 'kill';
   };
   app: {
     env: string;
     logLevel: string;
+    singleInstancePort: number;
   };
 }
 
@@ -38,6 +37,25 @@ function resolveAgentProvider(): AgentProvider {
   throw new Error(`Unsupported AGENT_PROVIDER: ${process.env.AGENT_PROVIDER}`);
 }
 
+function parsePositiveInt(name: string, fallback: number): number {
+  const rawValue = (process.env[name] || `${fallback}`).trim();
+  const parsed = Number.parseInt(rawValue, 10);
+
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    throw new Error(`Invalid ${name}: ${rawValue}`);
+  }
+
+  return parsed;
+}
+
+function parsePort(name: string, fallback: number): number {
+  const parsed = parsePositiveInt(name, fallback);
+  if (parsed > 65535) {
+    throw new Error(`Invalid ${name}: ${parsed}`);
+  }
+  return parsed;
+}
+
 const config: Config = {
   feishu: {
     appId: process.env.FEISHU_APP_ID || '',
@@ -49,12 +67,11 @@ const config: Config = {
   claude: {
     workRoot: process.env.CLAUDE_WORK_ROOT || process.cwd(),
     model: process.env.CLAUDE_MODEL || 'claude-opus-4-6',
-    messageTimeout: parseInt(process.env.MESSAGE_TIMEOUT || '300000', 10),
-    messageTimeoutAction: (process.env.MESSAGE_TIMEOUT_ACTION || 'notify') as 'notify' | 'kill',
   },
   app: {
     env: process.env.NODE_ENV || 'development',
     logLevel: process.env.LOG_LEVEL || 'info',
+    singleInstancePort: parsePort('SINGLE_INSTANCE_PORT', 8652),
   },
 };
 
