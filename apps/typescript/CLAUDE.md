@@ -105,6 +105,8 @@ npm run dev
 - `/new` - 调用 `ChatManager.reset(chatId)`，关闭当前 Agent 并创建新的
 - `/stop` - 调用 `ChatManager.interrupt(chatId)`，向 CLI stdin 写入中断信号
 - `/stat` - 调用 `ChatManager.getSessionInfo(chatId)`，返回当前 session ID 和工作目录
+- `/claude` - 切换到 Claude provider；如果已经是 Claude，则保持不变；无论是否切换都会反馈当前 Claude 模型名
+- `/codex` - 切换到 Codex provider；如果已经是 Codex，则保持不变；无论是否切换都会反馈当前状态
 - `/cd [路径]` - 调用 `ChatManager.switchCwd(chatId, newCwd)`，切换工作目录并 resume session
 
 ### 工具权限自动批准

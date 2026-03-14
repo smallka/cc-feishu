@@ -11,7 +11,6 @@ const MAX_CACHE_SIZE = 500;
 const queuedMessages = new Map<string, QueuedMessageTask[]>();
 const activeProcessors = new Map<string, Promise<void>>();
 let acceptingMessages = true;
-const SUPPORTED_PROVIDERS: AgentProvider[] = ['claude', 'codex'];
 const MESSAGE_TIMEOUT_MS = 300000;
 const MESSAGE_TIMEOUT_ACTION: 'notify' | 'kill' = 'notify';
 
@@ -45,14 +44,6 @@ function resolveWorkPath(input: string): string | null {
   return target;
 }
 
-function parseProvider(input: string): AgentProvider | null {
-  const normalized = input.trim().toLowerCase();
-  if (SUPPORTED_PROVIDERS.includes(normalized as AgentProvider)) {
-    return normalized as AgentProvider;
-  }
-  return null;
-}
-
 function getHelpText(chatId: string): string {
   const lines = [
     '可用命令:',
@@ -60,8 +51,8 @@ function getHelpText(chatId: string): string {
     '/new - 重置会话',
     '/stop - 打断当前任务',
     '/stat - 查看会话状态',
-    '/provider - 查看当前 provider',
-    '/provider <claude|codex> - 切换 provider 并重置当前会话',
+    '/claude - 切换到 Claude provider，并显示模型名',
+    '/codex - 切换到 Codex provider',
     '/cd <路径> - 切换工作目录，/cd . 回到根目录',
     '/debug - 查看调试信息',
   ];
@@ -377,30 +368,8 @@ async function handleMessageInternal(task: QueuedMessageTask, startTime: number)
     return;
   }
 
-  if (text === '/provider') {
-    await messageService.sendTextMessage(
-      chatId,
-      [
-        `当前 provider: ${chatManager.getProvider(chatId)}`,
-        `可切换 provider: ${SUPPORTED_PROVIDERS.join(', ')}`,
-        '用法: /provider <claude|codex>',
-        '切换后会重置当前会话，工作目录保持不变。',
-      ].join('\n'),
-    );
-    return;
-  }
-
-  if (text.startsWith('/provider ')) {
-    const input = text.slice(10).trim();
-    const provider = parseProvider(input);
-    if (!provider) {
-      await messageService.sendTextMessage(
-        chatId,
-        `不支持的 provider: ${input}\n可选值: ${SUPPORTED_PROVIDERS.join(', ')}`,
-      );
-      return;
-    }
-
+  if (text === '/claude' || text === '/codex') {
+    const provider = text.slice(1) as AgentProvider;
     const result = await chatManager.switchProvider(chatId, provider);
     const lines = result.changed
       ? [
@@ -412,6 +381,10 @@ async function handleMessageInternal(task: QueuedMessageTask, startTime: number)
         `当前已是 provider: ${provider}`,
         `工作目录: ${result.cwd}`,
       ];
+
+    if (provider === 'claude') {
+      lines.splice(1, 0, `模型: ${config.claude.model}`);
+    }
 
     if (!chatManager.supportsSessionResume(chatId)) {
       lines.push('该 provider 暂不支持 /resume。');
@@ -524,4 +497,3 @@ async function handleMessageInternal(task: QueuedMessageTask, startTime: number)
     });
   }
 }
-
