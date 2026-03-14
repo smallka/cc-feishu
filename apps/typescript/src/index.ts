@@ -1,7 +1,8 @@
-import logger from './utils/logger';
+﻿import logger from './utils/logger';
 import config from './config';
 import websocketManager from './bot/websocket';
 import { chatManager } from './bot/chat-manager';
+import { stopMessageHandling } from './handlers/message.handler';
 
 async function bootstrap() {
   try {
@@ -11,10 +12,7 @@ async function bootstrap() {
       provider: config.agent.provider,
     });
 
-    // 启动 ChatManager
     await chatManager.start();
-
-    // 启动飞书 WebSocket 连接
     await websocketManager.start();
 
     logger.info('Feishu bot is running');
@@ -24,16 +22,15 @@ async function bootstrap() {
   }
 }
 
-// 优雅关闭
 async function shutdown() {
   logger.info('Shutting down gracefully');
-  await chatManager.stop();
   await websocketManager.stop();
+  await stopMessageHandling();
+  await chatManager.stop();
   process.exit(0);
 }
 
 process.on('SIGINT', shutdown);
 process.on('SIGTERM', shutdown);
 
-// 启动应用
 bootstrap();

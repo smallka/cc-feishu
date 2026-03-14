@@ -47,7 +47,6 @@ export class ChatManager {
   private agents = new Map<string, ChatAgent>();
   private readonly defaultCwd: string;
   private readonly provider: AgentProvider;
-  private responseCompleteCallback: (() => void) | null = null;
   private readonly startTime: number;
 
   constructor() {
@@ -58,10 +57,6 @@ export class ChatManager {
 
   async start(): Promise<void> {
     logger.info('[ChatManager] Started', { provider: this.provider });
-  }
-
-  onResponseComplete(callback: () => void): void {
-    this.responseCompleteCallback = callback;
   }
 
   getProvider(): AgentProvider {
@@ -405,7 +400,6 @@ export class ChatManager {
         responseText: text,
       });
       this.sendResponse(chatId, text);
-      this.responseCompleteCallback?.();
     });
 
     agent.onError((error) => {
@@ -478,5 +472,6 @@ export class ChatManager {
 }
 
 export const chatManager = new ChatManager();
+
 
 

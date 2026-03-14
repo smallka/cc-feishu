@@ -94,8 +94,7 @@ export class Agent implements ChatAgent {
       await this.destroy(err as Error);
       throw err;
     }
-
-    this.bridge.sendUserMessage(text, onComplete);
+      await this.bridge.sendUserMessage(text, onComplete);
   }
 
   interrupt(): boolean {
@@ -181,5 +180,6 @@ export class Agent implements ChatAgent {
     return this.launcher.getProcess()?.pid;
   }
 }
+
 
 

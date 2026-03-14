@@ -8,14 +8,9 @@ import config from '../config';
 
 const processedMessages = new Set<string>();
 const MAX_CACHE_SIZE = 500;
-const reactionQueue: Array<{ messageId: string; reactionId: string }> = [];
-
-chatManager.onResponseComplete(() => {
-  const reaction = reactionQueue.shift();
-  if (reaction) {
-    messageService.removeReaction(reaction.messageId, reaction.reactionId).catch(() => {});
-  }
-});
+const queuedMessages = new Map<string, QueuedMessageTask[]>();
+const activeProcessors = new Map<string, Promise<void>>();
+let acceptingMessages = true;
 
 interface MessageEvent {
   sender: {
@@ -31,6 +26,12 @@ interface MessageEvent {
     content: string;
     chat_id: string;
   };
+}
+
+interface QueuedMessageTask {
+  data: MessageEvent;
+  text: string;
+  enqueuedAt: number;
 }
 
 function resolveWorkPath(input: string): string | null {
@@ -62,90 +63,287 @@ function getHelpText(): string {
   return lines.join('\n');
 }
 
-export async function handleMessage(data: MessageEvent): Promise<void> {
-  const startTime = Date.now();
-  const { sender, message } = data;
+export function handleMessage(data: MessageEvent): Promise<void> {
+  const { message, sender } = data;
+  const chatId = message.chat_id;
+
+  if (!acceptingMessages) {
+    logger.warn('Dropping incoming message because handler is stopping', {
+      messageId: message.message_id,
+      chatId,
+    });
+    return Promise.resolve();
+  }
 
   if (processedMessages.has(message.message_id)) {
     logger.debug('Skipping duplicate message', { messageId: message.message_id });
-    return;
+    return Promise.resolve();
   }
-  processedMessages.add(message.message_id);
-  if (processedMessages.size > MAX_CACHE_SIZE) {
-    const first = processedMessages.values().next().value;
-    if (first) {
-      processedMessages.delete(first);
-    }
-  }
-
-  logger.info('Processing message', {
-    messageId: message.message_id,
-    chatId: message.chat_id,
-    senderId: sender.sender_id.open_id,
-    provider: chatManager.getProvider(),
-  });
-
-  const timeout = config.claude.messageTimeout;
-  const timeoutPromise = new Promise<never>((_, reject) => {
-    setTimeout(() => {
-      reject(new Error('Message processing timeout'));
-    }, timeout);
-  });
-
-  try {
-    await Promise.race([
-      handleMessageInternal(data, startTime),
-      timeoutPromise,
-    ]);
-  } catch (error) {
-    const duration = Date.now() - startTime;
-    if (error instanceof Error && error.message === 'Message processing timeout') {
-      logger.error('Message processing timeout', {
-        messageId: message.message_id,
-        chatId: message.chat_id,
-        duration,
-        timeout,
-      });
-
-      await messageService.sendTextMessage(
-        message.chat_id,
-        `消息处理超时（${Math.round(timeout / 1000)}秒），已终止处理。请重试或使用 /new 重置会话。`,
-      ).catch(err => {
-        logger.error('Failed to send timeout notification', { error: err });
-      });
-
-      if (config.claude.messageTimeoutAction === 'kill') {
-        logger.info('Terminating session due to timeout', { chatId: message.chat_id });
-        await chatManager.reset(message.chat_id);
-      }
-    } else {
-      logger.error('Error handling message event', { error, duration });
-    }
-  }
-}
-
-async function handleMessageInternal(data: MessageEvent, startTime: number): Promise<void> {
-  const { message } = data;
-  const timeout = config.claude.messageTimeout;
 
   if (message.message_type !== 'text') {
-    return;
+    logger.debug('Skipping non-text message', {
+      messageId: message.message_id,
+      chatId,
+      messageType: message.message_type,
+    });
+    return Promise.resolve();
   }
 
   let content: { text?: string };
   try {
     content = JSON.parse(message.content) as { text?: string };
   } catch (error) {
-    logger.error('Failed to parse message content', { error });
-    return;
+    logger.error('Failed to parse message content', {
+      messageId: message.message_id,
+      chatId,
+      error,
+    });
+    return Promise.resolve();
   }
 
   const text = (content.text || '').trim();
   if (!text) {
+    logger.debug('Skipping empty text message', {
+      messageId: message.message_id,
+      chatId,
+    });
+    return Promise.resolve();
+  }
+
+  rememberProcessedMessage(message.message_id);
+
+  if (text === '/stop') {
+    return handleImmediateStop(chatId);
+  }
+
+  if (text === '/new') {
+    return handleImmediateReset(chatId);
+  }
+
+  const task: QueuedMessageTask = {
+    data,
+    text,
+    enqueuedAt: Date.now(),
+  };
+
+  enqueueTask(task);
+
+  logger.info('Queued incoming message', {
+    messageId: message.message_id,
+    chatId,
+    senderId: sender.sender_id.open_id,
+    provider: chatManager.getProvider(),
+    textLength: text.length,
+    queueDepth: getChatQueueLength(chatId),
+  });
+
+  return Promise.resolve();
+}
+
+export async function stopMessageHandling(): Promise<void> {
+  acceptingMessages = false;
+  logger.info('Stopping message handler', {
+    activeChats: activeProcessors.size,
+    queuedMessages: getTotalQueuedMessages(),
+  });
+  await Promise.all(Array.from(activeProcessors.values()));
+  logger.info('Message handler stopped');
+}
+
+async function handleImmediateStop(chatId: string): Promise<void> {
+  const result = await chatManager.interrupt(chatId);
+
+  if (result === 'success') {
+    await messageService.sendTextMessage(chatId, '已发送中断信号，AI 将停止当前任务。');
+  } else if (result === 'timeout') {
+    await messageService.sendTextMessage(chatId, '中断信号发送超时，请使用 /new 强制重置会话。');
+  } else if (result === 'no_session') {
+    await messageService.sendTextMessage(chatId, '当前没有活跃会话。');
+  } else {
+    await messageService.sendTextMessage(chatId, '中断失败，请使用 /new 强制重置会话。');
+  }
+}
+
+async function handleImmediateReset(chatId: string): Promise<void> {
+  const droppedCount = clearQueuedMessages(chatId);
+  await chatManager.interrupt(chatId).catch(() => 'error');
+  const cwd = await chatManager.reset(chatId);
+  const droppedSuffix = droppedCount > 0 ? `，已清空 ${droppedCount} 条排队消息` : '';
+  await messageService.sendTextMessage(chatId, `会话已重置${droppedSuffix}，可以开始新的对话。\n工作目录: ${cwd}`);
+}
+
+function rememberProcessedMessage(messageId: string): void {
+  processedMessages.add(messageId);
+  if (processedMessages.size > MAX_CACHE_SIZE) {
+    const first = processedMessages.values().next().value;
+    if (first) {
+      processedMessages.delete(first);
+    }
+  }
+}
+
+function enqueueTask(task: QueuedMessageTask): void {
+  const chatId = task.data.message.chat_id;
+  const queue = queuedMessages.get(chatId) ?? [];
+  queue.push(task);
+  queuedMessages.set(chatId, queue);
+  scheduleChatProcessor(chatId);
+}
+
+function scheduleChatProcessor(chatId: string): void {
+  if (activeProcessors.has(chatId)) {
     return;
   }
 
+  const processor = processChatQueue(chatId).finally(() => {
+    activeProcessors.delete(chatId);
+    if (hasQueuedMessages(chatId)) {
+      scheduleChatProcessor(chatId);
+    }
+  });
+
+  activeProcessors.set(chatId, processor);
+}
+
+async function processChatQueue(chatId: string): Promise<void> {
+  while (true) {
+    const task = dequeueTask(chatId);
+    if (!task) {
+      return;
+    }
+
+    await processQueuedMessage(task);
+  }
+}
+
+function dequeueTask(chatId: string): QueuedMessageTask | undefined {
+  const queue = queuedMessages.get(chatId);
+  if (!queue || queue.length === 0) {
+    queuedMessages.delete(chatId);
+    return undefined;
+  }
+
+  const task = queue.shift();
+  if (!queue.length) {
+    queuedMessages.delete(chatId);
+  }
+  return task;
+}
+
+function hasQueuedMessages(chatId: string): boolean {
+  return (queuedMessages.get(chatId)?.length ?? 0) > 0;
+}
+
+function clearQueuedMessages(chatId: string): number {
+  const queue = queuedMessages.get(chatId);
+  if (!queue?.length) {
+    queuedMessages.delete(chatId);
+    return 0;
+  }
+
+  const droppedCount = queue.length;
+  queuedMessages.delete(chatId);
+  return droppedCount;
+}
+
+function getChatQueueLength(chatId: string): number {
+  return queuedMessages.get(chatId)?.length ?? 0;
+}
+
+function getTotalQueuedMessages(): number {
+  let total = 0;
+  for (const queue of queuedMessages.values()) {
+    total += queue.length;
+  }
+  return total;
+}
+
+async function processQueuedMessage(task: QueuedMessageTask): Promise<void> {
+  const { data } = task;
+  const { sender, message } = data;
+  const startTime = Date.now();
+  const timeout = config.claude.messageTimeout;
+  const queueDelay = startTime - task.enqueuedAt;
+
+  logger.info('Processing queued message', {
+    messageId: message.message_id,
+    chatId: message.chat_id,
+    senderId: sender.sender_id.open_id,
+    provider: chatManager.getProvider(),
+    queueDelay,
+    remainingQueueDepth: getChatQueueLength(message.chat_id),
+  });
+
+  const processingPromise = handleMessageInternal(task, startTime);
+  let timeoutTimer: ReturnType<typeof setTimeout> | undefined;
+
+  try {
+    const result = await Promise.race<'completed' | 'timeout'>([
+      processingPromise.then(() => 'completed' as const),
+      new Promise<'timeout'>((resolve) => {
+        timeoutTimer = setTimeout(() => resolve('timeout'), timeout);
+      }),
+    ]);
+
+    if (result === 'completed') {
+      return;
+    }
+
+    const duration = Date.now() - startTime;
+    logger.error('Message processing timeout', {
+      messageId: message.message_id,
+      chatId: message.chat_id,
+      duration,
+      timeout,
+    });
+
+    if (config.claude.messageTimeoutAction === 'kill') {
+      await messageService.sendTextMessage(
+        message.chat_id,
+        `消息处理超时（${Math.round(timeout / 1000)}秒），已终止当前任务。请重试或使用 /new 重置会话。`,
+      ).catch(error => {
+        logger.error('Failed to send timeout notification', { error });
+      });
+
+      logger.info('Terminating session due to timeout', { chatId: message.chat_id });
+      await chatManager.interrupt(message.chat_id).catch(() => 'error');
+      await chatManager.reset(message.chat_id);
+    } else {
+      await messageService.sendTextMessage(
+        message.chat_id,
+        `消息处理超时（${Math.round(timeout / 1000)}秒），当前任务仍在收尾，后续消息会继续排队。`,
+      ).catch(error => {
+        logger.error('Failed to send timeout notification', { error });
+      });
+    }
+
+    await processingPromise.catch(error => {
+      logger.warn('Queued message finished after timeout', {
+        messageId: message.message_id,
+        chatId: message.chat_id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
+  } catch (error) {
+    const duration = Date.now() - startTime;
+    logger.error('Error handling queued message event', {
+      messageId: message.message_id,
+      chatId: message.chat_id,
+      duration,
+      error,
+    });
+  } finally {
+    if (timeoutTimer) {
+      clearTimeout(timeoutTimer);
+    }
+  }
+}
+
+async function handleMessageInternal(task: QueuedMessageTask, startTime: number): Promise<void> {
+  const { data, text } = task;
+  const { message } = data;
   const chatId = message.chat_id;
+  const timeout = config.claude.messageTimeout;
 
   logger.info('Received chat text', {
     messageId: message.message_id,
@@ -157,27 +355,6 @@ async function handleMessageInternal(data: MessageEvent, startTime: number): Pro
 
   if (text === '/help') {
     await messageService.sendTextMessage(chatId, getHelpText());
-    return;
-  }
-
-  if (text === '/stop') {
-    const result = await chatManager.interrupt(chatId);
-
-    if (result === 'success') {
-      await messageService.sendTextMessage(chatId, '已发送中断信号，AI 将停止当前任务。');
-    } else if (result === 'timeout') {
-      await messageService.sendTextMessage(chatId, '中断信号发送超时，请使用 /new 强制重置会话。');
-    } else if (result === 'no_session') {
-      await messageService.sendTextMessage(chatId, '当前没有活跃会话。');
-    } else {
-      await messageService.sendTextMessage(chatId, '中断失败，请使用 /new 强制重置会话。');
-    }
-    return;
-  }
-
-  if (text === '/new') {
-    const cwd = await chatManager.reset(chatId);
-    await messageService.sendTextMessage(chatId, `会话已重置，可以开始新的对话。\n工作目录: ${cwd}`);
     return;
   }
 
@@ -266,11 +443,19 @@ async function handleMessageInternal(data: MessageEvent, startTime: number): Pro
   }
 
   const reactionId = await messageService.addReaction(message.message_id, 'Typing');
-  if (reactionId) {
-    reactionQueue.push({ messageId: message.message_id, reactionId });
+  try {
+    await chatManager.sendMessage(chatId, text);
+  } finally {
+    if (reactionId) {
+      await messageService.removeReaction(message.message_id, reactionId).catch(error => {
+        logger.error('Failed to remove reaction', {
+          messageId: message.message_id,
+          chatId,
+          error,
+        });
+      });
+    }
   }
-
-  await chatManager.sendMessage(chatId, text);
 
   const duration = Date.now() - startTime;
   if (duration > timeout * 0.5) {
@@ -282,5 +467,3 @@ async function handleMessageInternal(data: MessageEvent, startTime: number): Pro
     });
   }
 }
-
-
