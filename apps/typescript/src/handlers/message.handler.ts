@@ -4,11 +4,12 @@ import { isAbsolute, resolve } from 'path';
 import logger from '../utils/logger';
 import { chatManager } from '../bot/chat-manager';
 import messageService from '../services/message.service';
-import config from '../config';
+import config, { type AgentProvider } from '../config';
 
 const processedMessages = new Set<string>();
 const MAX_CACHE_SIZE = 500;
 const reactionQueue: Array<{ messageId: string; reactionId: string }> = [];
+const SUPPORTED_PROVIDERS: AgentProvider[] = ['claude', 'codex'];
 
 chatManager.onResponseComplete(() => {
   const reaction = reactionQueue.shift();
@@ -41,18 +42,28 @@ function resolveWorkPath(input: string): string | null {
   return target;
 }
 
-function getHelpText(): string {
+function parseProvider(input: string): AgentProvider | null {
+  const normalized = input.trim().toLowerCase();
+  if (SUPPORTED_PROVIDERS.includes(normalized as AgentProvider)) {
+    return normalized as AgentProvider;
+  }
+  return null;
+}
+
+function getHelpText(chatId: string): string {
   const lines = [
     '可用命令:',
     '/help - 显示帮助',
     '/new - 重置会话',
     '/stop - 打断当前任务',
     '/stat - 查看会话状态',
+    '/provider - 查看当前 provider',
+    '/provider <claude|codex> - 切换 provider 并重置当前会话',
     '/cd <路径> - 切换工作目录，/cd . 回到根目录',
     '/debug - 查看调试信息',
   ];
 
-  if (chatManager.supportsSessionResume()) {
+  if (chatManager.supportsSessionResume(chatId)) {
     lines.push('/resume - 列出可恢复的 sessions');
     lines.push('/resume <编号|session_id> - 恢复指定 session');
   } else {
@@ -82,7 +93,7 @@ export async function handleMessage(data: MessageEvent): Promise<void> {
     messageId: message.message_id,
     chatId: message.chat_id,
     senderId: sender.sender_id.open_id,
-    provider: chatManager.getProvider(),
+    provider: chatManager.getProvider(message.chat_id),
   });
 
   const timeout = config.claude.messageTimeout;
@@ -150,13 +161,13 @@ async function handleMessageInternal(data: MessageEvent, startTime: number): Pro
   logger.info('Received chat text', {
     messageId: message.message_id,
     chatId,
-    provider: chatManager.getProvider(),
+    provider: chatManager.getProvider(chatId),
     text,
     textLength: text.length,
   });
 
   if (text === '/help') {
-    await messageService.sendTextMessage(chatId, getHelpText());
+    await messageService.sendTextMessage(chatId, getHelpText(chatId));
     return;
   }
 
@@ -177,13 +188,57 @@ async function handleMessageInternal(data: MessageEvent, startTime: number): Pro
 
   if (text === '/new') {
     const cwd = await chatManager.reset(chatId);
-    await messageService.sendTextMessage(chatId, `会话已重置，可以开始新的对话。\n工作目录: ${cwd}`);
+    await messageService.sendTextMessage(chatId, `会话已重置，可以开始新的对话。\nProvider: ${chatManager.getProvider(chatId)}\n工作目录: ${cwd}`);
     return;
   }
 
   if (text === '/stat') {
     const info = chatManager.getSessionInfo(chatId);
     await messageService.sendTextMessage(chatId, info);
+    return;
+  }
+
+  if (text === '/provider') {
+    await messageService.sendTextMessage(
+      chatId,
+      [
+        `当前 provider: ${chatManager.getProvider(chatId)}`,
+        `可切换 provider: ${SUPPORTED_PROVIDERS.join(', ')}`,
+        '用法: /provider <claude|codex>',
+        '切换后会重置当前会话，工作目录保持不变。',
+      ].join('\n'),
+    );
+    return;
+  }
+
+  if (text.startsWith('/provider ')) {
+    const input = text.slice(10).trim();
+    const provider = parseProvider(input);
+    if (!provider) {
+      await messageService.sendTextMessage(
+        chatId,
+        `不支持的 provider: ${input}\n可选值: ${SUPPORTED_PROVIDERS.join(', ')}`,
+      );
+      return;
+    }
+
+    const result = await chatManager.switchProvider(chatId, provider);
+    const lines = result.changed
+      ? [
+        `已切换 provider: ${provider}`,
+        `工作目录: ${result.cwd}`,
+        '当前会话已重置。',
+      ]
+      : [
+        `当前已是 provider: ${provider}`,
+        `工作目录: ${result.cwd}`,
+      ];
+
+    if (!chatManager.supportsSessionResume(chatId)) {
+      lines.push('该 provider 暂不支持 /resume。');
+    }
+
+    await messageService.sendTextMessage(chatId, lines.join('\n'));
     return;
   }
 
@@ -207,7 +262,7 @@ async function handleMessageInternal(data: MessageEvent, startTime: number): Pro
     }
 
     await chatManager.switchCwd(chatId, target);
-    if (chatManager.supportsSessionResume()) {
+    if (chatManager.supportsSessionResume(chatId)) {
       await messageService.sendCardMessage(chatId, chatManager.listSessions(chatId));
     } else {
       await messageService.sendTextMessage(chatId, `已切换工作目录: ${target}`);
@@ -221,7 +276,7 @@ async function handleMessageInternal(data: MessageEvent, startTime: number): Pro
   }
 
   if (text.startsWith('/resume ')) {
-    if (!chatManager.supportsSessionResume()) {
+    if (!chatManager.supportsSessionResume(chatId)) {
       await messageService.sendTextMessage(chatId, chatManager.listSessions(chatId));
       return;
     }
