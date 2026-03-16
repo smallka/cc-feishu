@@ -67,6 +67,10 @@ export class ChatManager {
     return this.getChatProvider(chatId);
   }
 
+  getCurrentCwd(chatId: string): string {
+    return this.getChatCwd(chatId);
+  }
+
   supportsSessionResume(chatId: string): boolean {
     return this.getChatProvider(chatId) === 'claude';
   }
@@ -248,8 +252,14 @@ export class ChatManager {
         lines.push('');
       });
     }
-
     return lines.join('\n');
+  }
+
+  getRecentSessions(chatId: string, limit = 9): SessionSummary[] {
+    if (!this.supportsSessionResume(chatId)) {
+      return [];
+    }
+    return this.getValidSessionsForChat(chatId).slice(0, limit);
   }
 
   getSessionCount(chatId: string): number {
@@ -284,7 +294,7 @@ export class ChatManager {
 
     const cwd = this.getChatCwd(chatId);
     if (!sessionExists(cwd, sessionId)) {
-      return `❌ Session 不存在: ${sessionId}\n使用 /resume 查看可用的 sessions`;
+      return `会话不存在: ${sessionId}\n使用 /resume 查看可用的 sessions`;
     }
 
     await this.destroyAgent(chatId, 'resuming session');
@@ -296,7 +306,7 @@ export class ChatManager {
     });
 
     logger.info('[ChatManager] Resumed session', { chatId, cwd, provider, sessionId });
-    return `✅ 已切换到 session: ${sessionId}\n工作目录: ${cwd}`;
+    return `已切换到 session: ${sessionId}\n工作目录: ${cwd}`;
   }
 
   getDebugInfo(): string {
@@ -517,6 +527,3 @@ export class ChatManager {
 }
 
 export const chatManager = new ChatManager();
-
-
-

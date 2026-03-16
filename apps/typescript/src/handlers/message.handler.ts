@@ -3,6 +3,8 @@ import { isAbsolute, resolve } from 'path';
 
 import logger from '../utils/logger';
 import { chatManager } from '../bot/chat-manager';
+import menuContext, { renderMenu, type MenuAction, type MenuContext } from '../bot/menu-context';
+import type { SessionSummary } from '../claude/session-scanner';
 import messageService from '../services/message.service';
 import config, { type AgentProvider } from '../config';
 
@@ -51,20 +53,168 @@ function getHelpText(chatId: string): string {
     '/new - 重置会话',
     '/stop - 打断当前任务',
     '/stat - 查看会话状态',
-    '/claude - 切换到 Claude provider，并显示模型名',
-    '/codex - 切换到 Codex provider',
+    '/agent - 选择 agent（支持数字选择）',
     '/cd <路径> - 切换工作目录，/cd . 回到根目录',
     '/debug - 查看调试信息',
   ];
 
   if (chatManager.supportsSessionResume(chatId)) {
-    lines.push('/resume - 列出可恢复的 sessions');
+    lines.push('/resume - 列出可恢复的 sessions（支持数字选择）');
     lines.push('/resume <编号|session_id> - 恢复指定 session');
   } else {
-    lines.push('/resume - 当前 provider 暂不支持');
+    lines.push('/resume - 当前 agent 暂不支持');
   }
 
   return lines.join('\n');
+}
+
+function formatDuration(seconds: number): string {
+  const wholeSeconds = Math.max(0, Math.floor(seconds));
+  if (wholeSeconds < 60) {
+    return `${wholeSeconds}秒`;
+  }
+  if (wholeSeconds < 3600) {
+    const minutes = Math.floor(wholeSeconds / 60);
+    const secs = wholeSeconds % 60;
+    return `${minutes}分${secs}秒`;
+  }
+  if (wholeSeconds < 86400) {
+    const hours = Math.floor(wholeSeconds / 3600);
+    const minutes = Math.floor((wholeSeconds % 3600) / 60);
+    return `${hours}小时${minutes}分`;
+  }
+  const days = Math.floor(wholeSeconds / 86400);
+  const hours = Math.floor((wholeSeconds % 86400) / 3600);
+  return `${days}天${hours}小时`;
+}
+
+function formatSessionMenuLabel(session: SessionSummary, currentCwd: string): string {
+  const shortId = session.sessionId.length > 8 ? `${session.sessionId.slice(0, 8)}...` : session.sessionId;
+  const age = formatDuration((Date.now() - session.mtimeMs) / 1000);
+  const summary = session.firstMessage || '无摘要';
+  const cwdSuffix = session.cwd === currentCwd ? '' : ` · ${session.cwd}`;
+  return `\`${shortId}\`  ${age}前${cwdSuffix}\n摘要 ${summary}`;
+}
+
+function buildResumeMenu(chatId: string): MenuContext | null {
+  const sessions = chatManager.getRecentSessions(chatId, 9);
+  if (sessions.length === 0) {
+    return null;
+  }
+
+  const currentCwd = chatManager.getCurrentCwd(chatId);
+  const total = chatManager.getSessionCount(chatId);
+  const descriptionLines = [`工作目录: \`${currentCwd}\``];
+  if (total > sessions.length) {
+    descriptionLines.push(`仅显示最近 ${sessions.length} 个会话；更多会话请使用 /resume <session_id>。`);
+  }
+
+  return {
+    kind: 'resume',
+    title: `恢复会话（最近 ${sessions.length} 条）`,
+    description: descriptionLines.join('\n'),
+    items: sessions.map((session, index) => ({
+      index: index + 1,
+      label: formatSessionMenuLabel(session, currentCwd),
+      action: { type: 'resume_session', sessionId: session.sessionId, cwd: session.cwd },
+    })),
+    expiresAt: Date.now(),
+  };
+}
+
+function buildAgentMenu(chatId: string): MenuContext {
+  const currentProvider = chatManager.getProvider(chatId);
+  const currentLabel = currentProvider === 'claude'
+    ? `当前 agent: Claude（模型: ${config.claude.model}）`
+    : '当前 agent: Codex';
+
+  return {
+    kind: 'agent',
+    title: '选择 Agent',
+    description: currentLabel,
+    items: [
+      {
+        index: 1,
+        label: `Claude${currentProvider === 'claude' ? '（当前）' : `（模型: ${config.claude.model}）`}`,
+        action: { type: 'switch_provider', provider: 'claude' },
+      },
+      {
+        index: 2,
+        label: `Codex${currentProvider === 'codex' ? '（当前）' : ''}`,
+        action: { type: 'switch_provider', provider: 'codex' },
+      },
+    ],
+    expiresAt: Date.now(),
+  };
+}
+
+function formatProviderSwitchMessage(provider: AgentProvider, result: { changed: boolean; cwd: string }, resumeSupported: boolean): string {
+  const lines = result.changed
+    ? [
+      `已切换 agent: ${provider}`,
+      `工作目录: ${result.cwd}`,
+      '当前会话已重置。',
+    ]
+    : [
+      `当前已是 agent: ${provider}`,
+      `工作目录: ${result.cwd}`,
+    ];
+
+  if (provider === 'claude') {
+    lines.splice(1, 0, `模型: ${config.claude.model}`);
+  }
+
+  if (!resumeSupported) {
+    lines.push('该 agent 暂不支持 /resume。');
+  }
+
+  return lines.join('\n');
+}
+
+async function executeMenuAction(chatId: string, action: MenuAction): Promise<void> {
+  if (action.type === 'resume_session') {
+    await chatManager.switchCwd(chatId, action.cwd);
+    const result = await chatManager.resumeSession(chatId, action.sessionId);
+    await messageService.sendTextMessage(chatId, result);
+    return;
+  }
+
+  const result = await chatManager.switchProvider(chatId, action.provider);
+  await messageService.sendTextMessage(
+    chatId,
+    formatProviderSwitchMessage(action.provider, result, chatManager.supportsSessionResume(chatId)),
+  );
+}
+
+async function handleMenuSelection(chatId: string, text: string): Promise<boolean> {
+  const resolved = menuContext.resolve(chatId, text);
+  if (!resolved) {
+    return false;
+  }
+
+  switch (resolved.kind) {
+    case 'selected':
+      await executeMenuAction(chatId, resolved.action);
+      return true;
+    case 'cancelled':
+      await messageService.sendTextMessage(chatId, '已取消当前选择。');
+      return true;
+    case 'expired':
+      await messageService.sendTextMessage(chatId, '上一个菜单已过期，请重新输入命令。');
+      return true;
+    case 'invalid': {
+      const validChoices = resolved.validChoices.join('、');
+      await messageService.sendTextMessage(chatId, `无效编号，请回复 ${validChoices} 或 0。`);
+      return true;
+    }
+    default:
+      return false;
+  }
+}
+
+async function sendMenu(chatId: string, context: Omit<MenuContext, 'expiresAt'>): Promise<void> {
+  const activeMenu = menuContext.set(chatId, context);
+  await messageService.sendCardMessage(chatId, renderMenu(activeMenu));
 }
 
 export function handleMessage(data: MessageEvent): Promise<void> {
@@ -155,6 +305,7 @@ export async function stopMessageHandling(): Promise<void> {
 }
 
 async function handleImmediateStop(chatId: string): Promise<void> {
+  menuContext.clear(chatId);
   const result = await chatManager.interrupt(chatId);
 
   if (result === 'success') {
@@ -169,6 +320,7 @@ async function handleImmediateStop(chatId: string): Promise<void> {
 }
 
 async function handleImmediateReset(chatId: string): Promise<void> {
+  menuContext.clear(chatId);
   const droppedCount = clearQueuedMessages(chatId);
   await chatManager.interrupt(chatId).catch(() => 'error');
   const cwd = await chatManager.reset(chatId);
@@ -357,6 +509,10 @@ async function handleMessageInternal(task: QueuedMessageTask, startTime: number)
     textLength: text.length,
   });
 
+  if (text.startsWith('/')) {
+    menuContext.clear(chatId);
+  }
+
   if (text === '/help') {
     await messageService.sendTextMessage(chatId, getHelpText(chatId));
     return;
@@ -368,29 +524,8 @@ async function handleMessageInternal(task: QueuedMessageTask, startTime: number)
     return;
   }
 
-  if (text === '/claude' || text === '/codex') {
-    const provider = text.slice(1) as AgentProvider;
-    const result = await chatManager.switchProvider(chatId, provider);
-    const lines = result.changed
-      ? [
-        `已切换 provider: ${provider}`,
-        `工作目录: ${result.cwd}`,
-        '当前会话已重置。',
-      ]
-      : [
-        `当前已是 provider: ${provider}`,
-        `工作目录: ${result.cwd}`,
-      ];
-
-    if (provider === 'claude') {
-      lines.splice(1, 0, `模型: ${config.claude.model}`);
-    }
-
-    if (!chatManager.supportsSessionResume(chatId)) {
-      lines.push('该 provider 暂不支持 /resume。');
-    }
-
-    await messageService.sendTextMessage(chatId, lines.join('\n'));
+  if (text === '/agent') {
+    await sendMenu(chatId, buildAgentMenu(chatId));
     return;
   }
 
@@ -423,7 +558,18 @@ async function handleMessageInternal(task: QueuedMessageTask, startTime: number)
   }
 
   if (text === '/resume') {
-    await messageService.sendCardMessage(chatId, chatManager.listSessions(chatId));
+    if (!chatManager.supportsSessionResume(chatId)) {
+      await messageService.sendTextMessage(chatId, chatManager.listSessions(chatId));
+      return;
+    }
+
+    const menu = buildResumeMenu(chatId);
+    if (!menu) {
+      await messageService.sendCardMessage(chatId, chatManager.listSessions(chatId));
+      return;
+    }
+
+    await sendMenu(chatId, menu);
     return;
   }
 
@@ -467,10 +613,16 @@ async function handleMessageInternal(task: QueuedMessageTask, startTime: number)
     return;
   }
 
+  if (await handleMenuSelection(chatId, text)) {
+    return;
+  }
+
   if (text.startsWith('/')) {
     await messageService.sendTextMessage(chatId, `未知命令: ${text.split(' ')[0]}\n输入 /help 查看可用命令。`);
     return;
   }
+
+  menuContext.clear(chatId);
 
   const reactionId = await messageService.addReaction(message.message_id, 'Typing');
   try {

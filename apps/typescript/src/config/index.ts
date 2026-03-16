@@ -29,7 +29,7 @@ export const MODEL_MAP: Record<string, string> = {
 };
 
 function resolveAgentProvider(): AgentProvider {
-  const rawValue = (process.env.AGENT_PROVIDER || 'claude').trim().toLowerCase();
+  const rawValue = (process.env.AGENT_PROVIDER || 'codex').trim().toLowerCase();
   if (rawValue === 'claude' || rawValue === 'codex') {
     return rawValue;
   }

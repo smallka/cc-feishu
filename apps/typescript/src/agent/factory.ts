@@ -12,7 +12,7 @@ export interface CreateAgentOptions {
 }
 
 export function createAgent(options: CreateAgentOptions): ChatAgent {
-  switch (options.provider ?? 'claude') {
+  switch (options.provider ?? 'codex') {
     case 'codex':
       return new CodexAgent(options.chatId, options.cwd, options.resumeSessionId);
     case 'claude':
