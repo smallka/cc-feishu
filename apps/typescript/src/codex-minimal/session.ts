@@ -155,14 +155,20 @@ export class CodexMinimalSession {
     });
 
     this.thread = client.startThread({
+      sandboxMode: 'workspace-write',
       workingDirectory: this.workingDirectory,
       skipGitRepoCheck: true,
+      approvalPolicy: 'never',
+      networkAccessEnabled: true,
     });
 
     logger.info('[CodexMinimalSession] Started thread', {
+      sandboxMode: 'workspace-write',
       workingDirectory: this.workingDirectory,
       threadId: this.thread.id,
       skipGitRepoCheck: true,
+      approvalPolicy: 'never',
+      networkAccessEnabled: true,
       codexPathOverride: this.codexPathOverride,
       codexArgsPrefix: this.codexArgsPrefix,
     });
