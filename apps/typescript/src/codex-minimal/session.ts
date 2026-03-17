@@ -26,6 +26,16 @@ export class TurnAbortedError extends Error {
   }
 }
 
+const MAX_TRANSIENT_RUN_RETRIES = 2;
+const TRANSIENT_RUN_RETRY_BASE_DELAY_MS = 1000;
+const TRANSIENT_RUN_ERROR_PATTERNS = [
+  /reconnecting\.\.\.\s*\d+\/\d+/i,
+  /stream disconnected before completion/i,
+  /transport error/i,
+  /network error/i,
+  /error decoding response body/i,
+];
+
 export class CodexMinimalSession {
   private readonly workingDirectory: string;
   private readonly codexPathOverride?: string;
@@ -97,41 +107,72 @@ export class CodexMinimalSession {
     const thread = await this.ensureThread();
     const abortController = new AbortController();
     this.abortController = abortController;
-
-    logger.info('[CodexMinimalSession] Starting thread.run', {
-      workingDirectory: this.workingDirectory,
-      threadId: thread.id,
-      messageLength: text.length,
-      messageText: text,
-    });
+    let attempt = 0;
 
     try {
-      const result = await thread.run(text, { signal: abortController.signal });
-      logger.info('[CodexMinimalSession] Completed thread.run', {
-        workingDirectory: this.workingDirectory,
-        threadId: thread.id,
-        textLength: result.finalResponse.length,
-        responseText: result.finalResponse,
-        usage: result.usage,
-      });
-      return {
-        text: result.finalResponse,
-        threadId: thread.id,
-      };
-    } catch (error) {
-      if (abortController.signal.aborted || isAbortError(error)) {
-        logger.info('[CodexMinimalSession] thread.run aborted', {
+      while (true) {
+        const attemptNumber = attempt + 1;
+        logger.info('[CodexMinimalSession] Starting thread.run', {
           workingDirectory: this.workingDirectory,
           threadId: thread.id,
+          messageLength: text.length,
+          messageText: text,
+          attempt: attemptNumber,
+          maxAttempts: MAX_TRANSIENT_RUN_RETRIES + 1,
         });
-        throw new TurnAbortedError();
+
+        try {
+          const result = await thread.run(text, { signal: abortController.signal });
+          logger.info('[CodexMinimalSession] Completed thread.run', {
+            workingDirectory: this.workingDirectory,
+            threadId: thread.id,
+            textLength: result.finalResponse.length,
+            responseText: result.finalResponse,
+            usage: result.usage,
+            attempt: attemptNumber,
+          });
+          return {
+            text: result.finalResponse,
+            threadId: thread.id,
+          };
+        } catch (error) {
+          if (abortController.signal.aborted || isAbortError(error)) {
+            logger.info('[CodexMinimalSession] thread.run aborted', {
+              workingDirectory: this.workingDirectory,
+              threadId: thread.id,
+              attempt: attemptNumber,
+            });
+            throw new TurnAbortedError();
+          }
+
+          const retryable = isTransientRunError(error);
+          const retriesRemaining = MAX_TRANSIENT_RUN_RETRIES - attempt;
+          logger.error('[CodexMinimalSession] thread.run failed', {
+            workingDirectory: this.workingDirectory,
+            threadId: thread.id,
+            attempt: attemptNumber,
+            retryable,
+            retriesRemaining: Math.max(0, retriesRemaining),
+            error,
+          });
+
+          if (!retryable || attempt >= MAX_TRANSIENT_RUN_RETRIES) {
+            throw error;
+          }
+
+          const retryDelayMs = getRetryDelayMs(attempt);
+          logger.warn('[CodexMinimalSession] Retrying thread.run after transient failure', {
+            workingDirectory: this.workingDirectory,
+            threadId: thread.id,
+            attempt: attemptNumber,
+            nextAttempt: attemptNumber + 1,
+            retryDelayMs,
+            errorMessage: error instanceof Error ? error.message : String(error),
+          });
+          await waitForRetryDelay(retryDelayMs, abortController.signal);
+          attempt += 1;
+        }
       }
-      logger.error('[CodexMinimalSession] thread.run failed', {
-        workingDirectory: this.workingDirectory,
-        threadId: thread.id,
-        error,
-      });
-      throw error;
     } finally {
       if (this.abortController === abortController) {
         this.abortController = null;
@@ -155,7 +196,7 @@ export class CodexMinimalSession {
     });
 
     this.thread = client.startThread({
-      sandboxMode: 'workspace-write',
+      sandboxMode: 'danger-full-access',
       workingDirectory: this.workingDirectory,
       skipGitRepoCheck: true,
       approvalPolicy: 'never',
@@ -163,7 +204,7 @@ export class CodexMinimalSession {
     });
 
     logger.info('[CodexMinimalSession] Started thread', {
-      sandboxMode: 'workspace-write',
+      sandboxMode: 'danger-full-access',
       workingDirectory: this.workingDirectory,
       threadId: this.thread.id,
       skipGitRepoCheck: true,
@@ -183,4 +224,37 @@ function isAbortError(error: unknown): boolean {
   }
 
   return error.name === 'AbortError' || /abort/i.test(error.message);
+}
+
+function isTransientRunError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+
+  return TRANSIENT_RUN_ERROR_PATTERNS.some(pattern => pattern.test(error.message));
+}
+
+function getRetryDelayMs(attempt: number): number {
+  return TRANSIENT_RUN_RETRY_BASE_DELAY_MS * (attempt + 1);
+}
+
+function waitForRetryDelay(delayMs: number, signal: AbortSignal): Promise<void> {
+  if (signal.aborted) {
+    return Promise.reject(new TurnAbortedError());
+  }
+
+  return new Promise<void>((resolve, reject) => {
+    const onAbort = () => {
+      clearTimeout(timer);
+      signal.removeEventListener('abort', onAbort);
+      reject(new TurnAbortedError());
+    };
+
+    const timer = setTimeout(() => {
+      signal.removeEventListener('abort', onAbort);
+      resolve();
+    }, delayMs);
+
+    signal.addEventListener('abort', onAbort, { once: true });
+  });
 }

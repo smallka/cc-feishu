@@ -1,4 +1,4 @@
-﻿import logger from '../utils/logger';
+import logger from '../utils/logger';
 import type { ChatAgent, OnErrorCallback, OnResponseCallback } from '../agent/types';
 import {
   CodexMinimalSession,
@@ -117,7 +117,9 @@ export class CodexAgent implements ChatAgent {
     }
 
     this.destroyed = true;
-    this.session.interrupt();
+    if (this.session.isRunning()) {
+      this.session.interrupt();
+    }
 
     logger.info('[CodexAgent] Destroying agent', {
       chatId: this.chatId,
