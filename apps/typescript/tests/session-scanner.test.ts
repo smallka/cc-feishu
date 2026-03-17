@@ -47,24 +47,48 @@ process.env.FEISHU_APP_SECRET = process.env.FEISHU_APP_SECRET || 'test-app-secre
 mkdirSync(projectsDir, { recursive: true });
 os.homedir = () => sandboxRoot;
 
-const { getSessionList } = require('../src/claude/session-scanner') as typeof import('../src/claude/session-scanner');
+const scanner = require('../src/claude/session-scanner') as typeof import('../src/claude/session-scanner');
 
 try {
-  writeSession(projectsDir, defaultCwd, 'root-session', 'root session', Date.now() - 10_000);
-  writeSession(projectsDir, siblingCwd, 'alpha-session', 'alpha session', Date.now() - 5_000);
+  const now = Date.now();
 
-  const sessions = getSessionList(defaultCwd, defaultCwd);
+  for (let index = 0; index < 10; index += 1) {
+    const cwd = index % 2 === 0 ? defaultCwd : siblingCwd;
+    writeSession(projectsDir, cwd, `session-${index}`, `session ${index}`, now - index * 1_000);
+  }
 
-  assert.equal(sessions.length, 2, 'expected current and sibling sessions');
+  const sessions = scanner.getValidSessions(defaultCwd, defaultCwd, 9);
+
+  assert.equal(sessions.length, 9, 'expected the most recent 9 sessions across directories');
   assert.deepEqual(sessions[0], {
-    sessionId: 'root-session',
+    sessionId: 'session-0',
     cwd: defaultCwd,
+    filePath: join(projectsDir, cwdToProjectDir(defaultCwd), 'session-0.jsonl'),
+    firstMessage: 'session 0',
+    mtimeMs: sessions[0].mtimeMs,
   });
   assert.deepEqual(sessions[1], {
-    sessionId: 'alpha-session',
+    sessionId: 'session-1',
+    cwd: siblingCwd,
+    filePath: join(projectsDir, cwdToProjectDir(siblingCwd), 'session-1.jsonl'),
+    firstMessage: 'session 1',
+    mtimeMs: sessions[1].mtimeMs,
+  });
+
+  const sessionList = scanner.getSessionList(defaultCwd, defaultCwd);
+  assert.equal(sessionList.length, 10, 'expected session list to include all resumable sessions');
+  assert.deepEqual(sessionList[0], {
+    sessionId: 'session-0',
+    cwd: defaultCwd,
+  });
+  assert.deepEqual(scanner.getRecentDirectories(2), [
+    { cwd: defaultCwd, mtimeMs: sessions[0].mtimeMs },
+    { cwd: siblingCwd, mtimeMs: sessions[1].mtimeMs },
+  ]);
+  assert.deepEqual(scanner.findSessionById('session-3'), {
+    sessionId: 'session-3',
     cwd: siblingCwd,
   });
-  assert.equal(sessions[1].cwd, siblingCwd, 'sibling cwd should come from transcript metadata');
 
   console.log('session-scanner.test.ts passed');
 } finally {

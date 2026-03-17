@@ -3,12 +3,19 @@ import messageService from '../services/message.service';
 import { createAgent } from '../agent/factory';
 import type { AgentProvider } from '../config';
 import type { ChatAgent } from '../agent/types';
+import type { DirectorySummary, SessionSummary, SessionTarget } from '../agent/session-history';
 import {
-  getSessionList,
-  getValidSessions,
-  sessionExists,
-  type SessionSummary,
+  findSessionById as findClaudeSessionById,
+  getRecentDirectories as getClaudeRecentDirectories,
+  getSessionList as getClaudeSessionList,
+  getValidSessions as getClaudeValidSessions,
 } from '../claude/session-scanner';
+import {
+  findSessionById as findCodexSessionById,
+  getRecentDirectories as getCodexRecentDirectories,
+  getSessionList as getCodexSessionList,
+  getValidSessions as getCodexValidSessions,
+} from '../codex/session-scanner';
 import config from '../config';
 
 interface ChatData {
@@ -16,11 +23,6 @@ interface ChatData {
   provider: AgentProvider;
   sessionId: string | undefined;
   sessionNotified?: boolean;
-}
-
-interface ResumeTarget {
-  sessionId: string;
-  cwd: string;
 }
 
 function formatDuration(seconds: number): string {
@@ -72,7 +74,8 @@ export class ChatManager {
   }
 
   supportsSessionResume(chatId: string): boolean {
-    return this.getChatProvider(chatId) === 'claude';
+    const provider = this.getChatProvider(chatId);
+    return provider === 'claude' || provider === 'codex';
   }
 
   async sendMessage(chatId: string, text: string): Promise<void> {
@@ -199,8 +202,8 @@ export class ChatManager {
 
     const chatData = this.chats.get(chatId);
     const cwd = chatData?.cwd ?? this.defaultCwd;
-    const isRoot = cwd === this.defaultCwd;
     const sessions = this.getValidSessionsForChat(chatId);
+    const totalSessions = this.getSessionCount(chatId);
 
     if (sessions.length === 0) {
       return `工作目录: \`${cwd}\`\n\n暂无 session 记录`;
@@ -209,49 +212,24 @@ export class ChatManager {
     const currentSession = chatData?.sessionId;
     const lines: string[] = [];
 
-    if (isRoot) {
-      lines.push('**Sessions（根目录）**');
-      lines.push(`工作目录: \`${cwd}\``);
-      lines.push('');
-      lines.push('**当前目录最近 5 条**');
-      lines.push('');
-
-      let currentDirCount = 0;
-      for (let index = 0; index < sessions.length; index += 1) {
-        const session = sessions[index];
-        if (session.cwd !== cwd) {
-          break;
-        }
-
-        currentDirCount = index + 1;
-        lines.push(this.formatSessionLine(index + 1, session, currentSession));
-        lines.push(`摘要 ${session.firstMessage}`);
-        lines.push('');
-      }
-
-      if (currentDirCount < sessions.length) {
-        lines.push('**其他目录最近会话**');
-        lines.push('');
-
-        for (let index = currentDirCount; index < sessions.length; index += 1) {
-          const session = sessions[index];
-          lines.push(`**${index + 1}.** \`${session.cwd}\``);
-          lines.push(`   \`${session.sessionId.slice(0, 8)}...\`  ${formatDuration((Date.now() - session.mtimeMs) / 1000)}前`);
-          lines.push(`   摘要 ${session.firstMessage}`);
-          lines.push('');
-        }
-      }
-    } else {
-      lines.push(`**Sessions（${sessions.length} 条）**`);
-      lines.push(`工作目录: \`${cwd}\``);
-      lines.push('');
-
-      sessions.forEach((session, index) => {
-        lines.push(this.formatSessionLine(index + 1, session, currentSession));
-        lines.push(`摘要 ${session.firstMessage}`);
-        lines.push('');
-      });
+    lines.push(`**Sessions（最近 ${sessions.length} 条）**`);
+    lines.push(`工作目录: \`${cwd}\``);
+    if (cwd === this.defaultCwd) {
+      lines.push('当前为默认目录，已显示所有目录的最近会话。');
     }
+    if (totalSessions > sessions.length) {
+      lines.push(`仅显示最近 ${sessions.length} 条；更多会话请使用 /resume <session_id>。`);
+    }
+    lines.push('');
+
+    sessions.forEach((session, index) => {
+      lines.push(this.formatSessionLine(index + 1, session, currentSession));
+      if (session.cwd !== cwd) {
+        lines.push(`目录 ${session.cwd}`);
+      }
+      lines.push(`摘要 ${session.firstMessage}`);
+      lines.push('');
+    });
     return lines.join('\n');
   }
 
@@ -259,22 +237,32 @@ export class ChatManager {
     if (!this.supportsSessionResume(chatId)) {
       return [];
     }
-    return this.getValidSessionsForChat(chatId).slice(0, limit);
+    return this.getValidSessionsForChat(chatId, limit);
   }
 
   getSessionCount(chatId: string): number {
     if (!this.supportsSessionResume(chatId)) {
       return 0;
     }
-    return getSessionList(this.getChatCwd(chatId), this.defaultCwd).length;
+    return this.getSessionListForChat(chatId).length;
   }
 
-  resolveResumeTarget(chatId: string, index: number): ResumeTarget | null {
+  getRecentDirectories(chatId: string, limit = 9): DirectorySummary[] {
+    switch (this.getChatProvider(chatId)) {
+      case 'codex':
+        return getCodexRecentDirectories(limit);
+      case 'claude':
+      default:
+        return getClaudeRecentDirectories(limit);
+    }
+  }
+
+  resolveResumeTarget(chatId: string, index: number): SessionTarget | null {
     if (!this.supportsSessionResume(chatId)) {
       return null;
     }
 
-    const sessions = getSessionList(this.getChatCwd(chatId), this.defaultCwd);
+    const sessions = this.getSessionListForChat(chatId);
     if (index < 1 || index > sessions.length) {
       return null;
     }
@@ -292,21 +280,26 @@ export class ChatManager {
       return `当前 provider (${provider}) 暂不支持 /resume。`;
     }
 
-    const cwd = this.getChatCwd(chatId);
-    if (!sessionExists(cwd, sessionId)) {
+    const target = this.resolveResumeTargetBySessionId(chatId, sessionId);
+    if (!target) {
       return `会话不存在: ${sessionId}\n使用 /resume 查看可用的 sessions`;
     }
 
     await this.destroyAgent(chatId, 'resuming session');
     this.chats.set(chatId, {
-      cwd,
+      cwd: target.cwd,
       provider,
-      sessionId,
+      sessionId: target.sessionId,
       sessionNotified: false,
     });
 
-    logger.info('[ChatManager] Resumed session', { chatId, cwd, provider, sessionId });
-    return `已切换到 session: ${sessionId}\n工作目录: ${cwd}`;
+    logger.info('[ChatManager] Resumed session', {
+      chatId,
+      cwd: target.cwd,
+      provider,
+      sessionId: target.sessionId,
+    });
+    return `已切换到 session: ${target.sessionId}\n工作目录: ${target.cwd}`;
   }
 
   getDebugInfo(): string {
@@ -414,7 +407,7 @@ export class ChatManager {
     });
     this.agents.set(chatId, agent);
 
-    const expectedSessionId = agent.getSessionId();
+    const expectedSessionId = resumeSessionId ?? agent.getSessionId();
 
     agent.onResponse((text) => {
       const currentData = this.chats.get(chatId);
@@ -470,8 +463,36 @@ export class ChatManager {
     return this.chats.get(chatId)?.provider ?? this.defaultProvider;
   }
 
-  private getValidSessionsForChat(chatId: string): SessionSummary[] {
-    return getValidSessions(this.getChatCwd(chatId), this.defaultCwd);
+  private getValidSessionsForChat(chatId: string, limit = 9): SessionSummary[] {
+    const cwd = this.getChatCwd(chatId);
+    switch (this.getChatProvider(chatId)) {
+      case 'codex':
+        return getCodexValidSessions(cwd, this.defaultCwd, limit);
+      case 'claude':
+      default:
+        return getClaudeValidSessions(cwd, this.defaultCwd, limit);
+    }
+  }
+
+  private getSessionListForChat(chatId: string): SessionTarget[] {
+      const cwd = this.getChatCwd(chatId);
+      switch (this.getChatProvider(chatId)) {
+        case 'codex':
+        return getCodexSessionList(cwd, this.defaultCwd);
+      case 'claude':
+      default:
+        return getClaudeSessionList(cwd, this.defaultCwd);
+    }
+  }
+
+  private resolveResumeTargetBySessionId(chatId: string, sessionId: string): SessionTarget | null {
+    switch (this.getChatProvider(chatId)) {
+      case 'codex':
+        return findCodexSessionById(sessionId);
+      case 'claude':
+      default:
+        return findClaudeSessionById(sessionId);
+    }
   }
 
   private formatSessionLine(index: number, session: SessionSummary, currentSession?: string): string {

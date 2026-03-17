@@ -4,7 +4,7 @@ import { isAbsolute, resolve } from 'path';
 import logger from '../utils/logger';
 import { chatManager } from '../bot/chat-manager';
 import menuContext, { renderMenu, type MenuAction, type MenuContext } from '../bot/menu-context';
-import type { SessionSummary } from '../claude/session-scanner';
+import type { DirectorySummary, SessionSummary } from '../agent/session-history';
 import messageService from '../services/message.service';
 import config, { type AgentProvider } from '../config';
 
@@ -54,6 +54,7 @@ function getHelpText(chatId: string): string {
     '/stop - 打断当前任务',
     '/stat - 查看会话状态',
     '/agent - 选择 agent（支持数字选择）',
+    '/cd - 列出最近的工作目录（支持数字选择）',
     '/cd <路径> - 切换工作目录，/cd . 回到根目录',
     '/debug - 查看调试信息',
   ];
@@ -96,6 +97,32 @@ function formatSessionMenuLabel(session: SessionSummary, currentCwd: string): st
   return `\`${shortId}\`  ${age}前${cwdSuffix}\n摘要 ${summary}`;
 }
 
+function formatDirectoryMenuLabel(directory: DirectorySummary, currentCwd: string): string {
+  const age = formatDuration((Date.now() - directory.mtimeMs) / 1000);
+  const currentSuffix = directory.cwd === currentCwd ? '（当前）' : '';
+  return `\`${directory.cwd}\`${currentSuffix}\n最近 session: ${age}前`;
+}
+
+function buildCwdMenu(chatId: string): MenuContext | null {
+  const directories = chatManager.getRecentDirectories(chatId, 9);
+  if (directories.length === 0) {
+    return null;
+  }
+
+  const currentCwd = chatManager.getCurrentCwd(chatId);
+  return {
+    kind: 'cwd',
+    title: `切换目录（最近 ${directories.length} 个）`,
+    description: `当前工作目录: \`${currentCwd}\`\n按最近 session 去重排序。`,
+    items: directories.map((directory, index) => ({
+      index: index + 1,
+      label: formatDirectoryMenuLabel(directory, currentCwd),
+      action: { type: 'switch_cwd', cwd: directory.cwd },
+    })),
+    expiresAt: Date.now(),
+  };
+}
+
 function buildResumeMenu(chatId: string): MenuContext | null {
   const sessions = chatManager.getRecentSessions(chatId, 9);
   if (sessions.length === 0) {
@@ -105,6 +132,9 @@ function buildResumeMenu(chatId: string): MenuContext | null {
   const currentCwd = chatManager.getCurrentCwd(chatId);
   const total = chatManager.getSessionCount(chatId);
   const descriptionLines = [`工作目录: \`${currentCwd}\``];
+  if (currentCwd === config.claude.workRoot) {
+    descriptionLines.push('当前为默认目录，已显示所有目录最近会话。');
+  }
   if (total > sessions.length) {
     descriptionLines.push(`仅显示最近 ${sessions.length} 个会话；更多会话请使用 /resume <session_id>。`);
   }
@@ -176,6 +206,16 @@ async function executeMenuAction(chatId: string, action: MenuAction): Promise<vo
     await chatManager.switchCwd(chatId, action.cwd);
     const result = await chatManager.resumeSession(chatId, action.sessionId);
     await messageService.sendTextMessage(chatId, result);
+    return;
+  }
+
+  if (action.type === 'switch_cwd') {
+    await chatManager.switchCwd(chatId, action.cwd);
+    if (chatManager.supportsSessionResume(chatId)) {
+      await messageService.sendCardMessage(chatId, chatManager.listSessions(chatId));
+    } else {
+      await messageService.sendTextMessage(chatId, `已切换工作目录: ${action.cwd}`);
+    }
     return;
   }
 
@@ -536,7 +576,13 @@ async function handleMessageInternal(task: QueuedMessageTask, startTime: number)
   }
 
   if (text === '/cd') {
-    await messageService.sendTextMessage(chatId, '用法: /cd <路径>\n使用 /cd . 切换到根目录');
+    const menu = buildCwdMenu(chatId);
+    if (!menu) {
+      await messageService.sendTextMessage(chatId, '暂无 session 目录记录。\n用法: /cd <路径>\n使用 /cd . 切换到根目录');
+      return;
+    }
+
+    await sendMenu(chatId, menu);
     return;
   }
 

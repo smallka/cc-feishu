@@ -3,14 +3,7 @@ import { join } from 'path';
 import { homedir } from 'os';
 
 import logger from '../utils/logger';
-
-export interface SessionSummary {
-  sessionId: string;
-  cwd: string;
-  filePath: string;
-  firstMessage: string;
-  mtimeMs: number;
-}
+import type { DirectorySummary, SessionSummary, SessionTarget } from '../agent/session-history';
 
 const PROJECTS_DIR = join(homedir(), '.claude', 'projects');
 
@@ -85,7 +78,7 @@ function readSessionMetadata(filePath: string): SessionMetadata | null {
   return null;
 }
 
-function collectSessionsForDir(projectDir: string, fallbackCwd: string | undefined, limit: number): SessionSummary[] {
+function collectSessionsForDir(projectDir: string, fallbackCwd: string | undefined, limit = Number.POSITIVE_INFINITY): SessionSummary[] {
   if (!existsSync(projectDir)) {
     return [];
   }
@@ -141,45 +134,83 @@ function collectSessionsForDir(projectDir: string, fallbackCwd: string | undefin
   }
 }
 
-export function getValidSessions(cwd: string, defaultCwd: string, limitPerDir = 5): SessionSummary[] {
+function scanAllSessions(limit = Number.POSITIVE_INFINITY): SessionSummary[] {
   const projectsDir = getProjectsDir();
-  const normalizedCurrentDir = cwdToProjectDir(cwd);
-  const currentProjectDir = join(projectsDir, normalizedCurrentDir);
-  const sessions = collectSessionsForDir(currentProjectDir, cwd, limitPerDir);
-
-  if (cwd !== defaultCwd || !existsSync(projectsDir)) {
-    return sessions;
+  if (!existsSync(projectsDir)) {
+    return [];
   }
 
   try {
-    const siblingDirs = readdirSync(projectsDir, { withFileTypes: true })
+    return readdirSync(projectsDir, { withFileTypes: true })
       .filter(entry => entry.isDirectory())
-      .filter(entry => entry.name !== normalizedCurrentDir)
       .filter(entry => !entry.name.includes('Temp'))
-      .map(entry => {
-        const projectDir = join(projectsDir, entry.name);
-        const latestSession = collectSessionsForDir(projectDir, undefined, 1)[0];
-        return latestSession ?? null;
-      })
-      .filter((session): session is SessionSummary => session !== null)
+      .flatMap(entry => collectSessionsForDir(join(projectsDir, entry.name), undefined))
       .sort((a, b) => b.mtimeMs - a.mtimeMs)
-      .slice(0, limitPerDir);
-
-    return sessions.concat(siblingDirs);
+      .slice(0, limit);
   } catch (error: any) {
-    logger.error('[SessionScanner] Failed to scan sibling sessions', {
-      cwd,
+    logger.error('[SessionScanner] Failed to scan all sessions', {
       error: error.message,
     });
-    return sessions;
+    return [];
   }
 }
 
-export function getSessionList(cwd: string, defaultCwd: string): Array<{ sessionId: string; cwd: string }> {
-  return getValidSessions(cwd, defaultCwd).map(session => ({
+export function getValidSessions(cwd: string, defaultCwd: string, limitPerDir = 5): SessionSummary[] {
+  if (cwd === defaultCwd) {
+    return scanAllSessions(limitPerDir);
+  }
+
+  const currentProjectDir = join(getProjectsDir(), cwdToProjectDir(cwd));
+  return collectSessionsForDir(currentProjectDir, cwd, limitPerDir);
+}
+
+export function getSessionList(cwd: string, defaultCwd: string): SessionTarget[] {
+  const sessions = cwd === defaultCwd
+    ? scanAllSessions()
+    : collectSessionsForDir(join(getProjectsDir(), cwdToProjectDir(cwd)), cwd);
+
+  return sessions.map(session => ({
     sessionId: session.sessionId,
     cwd: session.cwd,
   }));
+}
+
+export function getRecentDirectories(limit = 9): DirectorySummary[] {
+  const directories = new Map<string, DirectorySummary>();
+
+  for (const session of scanAllSessions()) {
+    if (directories.has(session.cwd)) {
+      continue;
+    }
+
+    directories.set(session.cwd, {
+      cwd: session.cwd,
+      mtimeMs: session.mtimeMs,
+    });
+
+    if (directories.size >= limit) {
+      break;
+    }
+  }
+
+  return Array.from(directories.values());
+}
+
+export function findSessionById(sessionId: string): SessionTarget | null {
+  const normalizedId = sessionId.trim();
+  if (!normalizedId) {
+    return null;
+  }
+
+  const session = scanAllSessions().find(item => item.sessionId === normalizedId);
+  if (!session) {
+    return null;
+  }
+
+  return {
+    sessionId: session.sessionId,
+    cwd: session.cwd,
+  };
 }
 
 export function sessionExists(cwd: string, sessionId: string): boolean {

@@ -4,6 +4,7 @@ const MENU_TTL_MS = 60_000;
 
 export type MenuAction =
   | { type: 'resume_session'; sessionId: string; cwd: string }
+  | { type: 'switch_cwd'; cwd: string }
   | { type: 'switch_provider'; provider: AgentProvider };
 
 export interface MenuItem {
@@ -13,7 +14,7 @@ export interface MenuItem {
 }
 
 export interface MenuContext {
-  kind: 'resume' | 'agent';
+  kind: 'resume' | 'agent' | 'cwd';
   title: string;
   description?: string;
   items: MenuItem[];
