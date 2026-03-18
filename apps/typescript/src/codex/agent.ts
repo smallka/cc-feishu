@@ -31,6 +31,7 @@ export class CodexAgent implements ChatAgent {
       workingDirectory: cwd,
       codexPathOverride: launchConfig.executablePath,
       codexArgsPrefix: launchConfig.argsPrefix,
+      resumeSessionId,
     });
 
     logger.info('[CodexAgent] Creating agent', {
@@ -40,7 +41,7 @@ export class CodexAgent implements ChatAgent {
       codexPathOverride: launchConfig.executablePath,
       codexArgsPrefix: launchConfig.argsPrefix,
       requestedResumeSessionId: resumeSessionId,
-      resumeSupported: false,
+      resumeSupported: true,
     });
   }
 

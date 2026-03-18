@@ -5,6 +5,7 @@ export interface CodexMinimalSessionOptions {
   workingDirectory: string;
   codexPathOverride?: string;
   codexArgsPrefix?: string[];
+  resumeSessionId?: string;
 }
 
 export interface SendMessageResult {
@@ -40,6 +41,7 @@ export class CodexMinimalSession {
   private readonly workingDirectory: string;
   private readonly codexPathOverride?: string;
   private readonly codexArgsPrefix?: string[];
+  private readonly resumeSessionId?: string;
   private thread: ThreadLike | null = null;
   private inFlightPromise: Promise<SendMessageResult> | null = null;
   private abortController: AbortController | null = null;
@@ -48,6 +50,7 @@ export class CodexMinimalSession {
     this.workingDirectory = options.workingDirectory;
     this.codexPathOverride = options.codexPathOverride;
     this.codexArgsPrefix = options.codexArgsPrefix;
+    this.resumeSessionId = options.resumeSessionId;
   }
 
   async sendMessage(text: string): Promise<SendMessageResult> {
@@ -194,16 +197,20 @@ export class CodexMinimalSession {
       codexPathOverride: this.codexPathOverride,
       codexArgsPrefix: this.codexArgsPrefix,
     });
-
-    this.thread = client.startThread({
+    const threadOptions = {
       sandboxMode: 'danger-full-access',
       workingDirectory: this.workingDirectory,
       skipGitRepoCheck: true,
       approvalPolicy: 'never',
       networkAccessEnabled: true,
-    });
+    };
+    this.thread = this.resumeSessionId
+      ? client.resumeThread(this.resumeSessionId, threadOptions)
+      : client.startThread(threadOptions);
 
-    logger.info('[CodexMinimalSession] Started thread', {
+    logger.info('[CodexMinimalSession] Created thread handle', {
+      mode: this.resumeSessionId ? 'resume' : 'start',
+      requestedResumeSessionId: this.resumeSessionId,
       sandboxMode: 'danger-full-access',
       workingDirectory: this.workingDirectory,
       threadId: this.thread.id,

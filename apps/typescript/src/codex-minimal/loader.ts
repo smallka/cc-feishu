@@ -23,6 +23,15 @@ export interface CodexLike {
     additionalDirectories?: string[];
     networkAccessEnabled?: boolean;
   }): ThreadLike;
+  resumeThread(id: string, options?: {
+    model?: string;
+    sandboxMode?: string;
+    workingDirectory?: string;
+    skipGitRepoCheck?: boolean;
+    approvalPolicy?: string;
+    additionalDirectories?: string[];
+    networkAccessEnabled?: boolean;
+  }): ThreadLike;
 }
 
 export interface CodexSdkModule {
