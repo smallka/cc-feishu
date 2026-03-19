@@ -89,6 +89,33 @@ npm run build
 npm start
 ```
 
+### 使用 PM2 托管
+
+推荐在 Windows 常驻运行时使用项目根目录下的 `ecosystem.config.js`：
+
+```powershell
+New-Item -ItemType Directory -Force logs
+npm run build
+pm2 start ecosystem.config.js
+pm2 save
+```
+
+常用命令：
+
+```powershell
+pm2 status
+pm2 logs cc-feishu-ts
+pm2 restart cc-feishu-ts
+pm2 stop cc-feishu-ts
+```
+
+说明：
+
+- `ecosystem.config.js` 已固定工作目录为项目根目录，`.env` 会按当前仓库结构自动加载。
+- 默认日志会落到 `logs/pm2-out.log` 和 `logs/pm2-error.log`。
+- 若在 Windows 下使用 `codex` provider，建议在 `.env` 中显式配置 `CODEX_CMD`，避免因运行用户不同导致找不到 Codex CLI。
+- 若在 Windows 11 下遇到 PM2 的 `spawn wmic ENOENT`，可参考 `docs/pm2-win11-pidusage-fix.md`。
+
 ## 单连接启动锁
 
 应用在启动时会先获取本地端口锁，再初始化 WebSocket 连接。这样可以避免同一台机器上出现多个本地进程同时持有飞书长连接。

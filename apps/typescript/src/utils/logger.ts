@@ -47,27 +47,41 @@ function serializeLogValue(value: unknown, seen = new WeakSet<object>()): unknow
   return value;
 }
 
-const logger = winston.createLogger({
-  level: config.app.logLevel,
-  format: winston.format.combine(
+function buildConsoleLine(info: winston.Logform.TransformableInfo): string {
+  const { timestamp, level, message, service, ...meta } = info;
+  const serializedMeta = serializeLogValue(meta);
+  const metaStr = Object.keys(meta).length
+    ? ` ${JSON.stringify(serializedMeta)}`
+    : '';
+
+  return `${timestamp} [${level}] ${service}: ${message}${metaStr}`;
+}
+
+function createConsoleFormat(useColors: boolean): winston.Logform.Format {
+  const formats: winston.Logform.Format[] = [
     winston.format.timestamp({ format: 'YYYY-MM-DD HH:mm:ss' }),
     winston.format.errors({ stack: true }),
     winston.format.splat(),
-    winston.format.json()
-  ),
+  ];
+
+  if (useColors) {
+    formats.push(winston.format.colorize({ all: true }));
+  }
+
+  formats.push(winston.format.printf((info) => buildConsoleLine(info)));
+
+  return winston.format.combine(...formats);
+}
+
+const useColors = Boolean(process.stdout.isTTY);
+
+const logger = winston.createLogger({
+  level: config.app.logLevel,
   defaultMeta: { service: 'feishu-bot' },
   transports: [
     new winston.transports.Console({
-      format: winston.format.combine(
-        winston.format.colorize(),
-        winston.format.printf(({ timestamp, level, message, service, ...meta }) => {
-          const serializedMeta = serializeLogValue(meta);
-          const metaStr = Object.keys(meta).length
-            ? JSON.stringify(serializedMeta)
-            : '';
-          return `${timestamp} [${level}]: ${message} ${metaStr}`;
-        })
-      ),
+      stderrLevels: ['error'],
+      format: createConsoleFormat(useColors),
     }),
   ],
 });

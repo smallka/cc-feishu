@@ -48,6 +48,12 @@ export class Thread {
 
     for await (const rawItem of generator) {
       const event = JSON.parse(rawItem);
+      if (typeof turnOptions.onEvent === "function") {
+        try {
+          turnOptions.onEvent(event);
+        } catch {}
+      }
+
       if (event.type === "thread.started") {
         this.idValue = event.thread_id;
         continue;

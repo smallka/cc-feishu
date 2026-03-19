@@ -13,7 +13,7 @@ const MAX_CACHE_SIZE = 500;
 const queuedMessages = new Map<string, QueuedMessageTask[]>();
 const activeProcessors = new Map<string, Promise<void>>();
 let acceptingMessages = true;
-const MESSAGE_TIMEOUT_MS = 300000;
+const MESSAGE_IDLE_TIMEOUT_MS = 300000;
 const MESSAGE_TIMEOUT_ACTION: 'notify' | 'kill' = 'notify';
 
 interface MessageEvent {
@@ -36,6 +36,10 @@ interface QueuedMessageTask {
   data: MessageEvent;
   text: string;
   enqueuedAt: number;
+}
+
+interface MessageProcessingOptions {
+  onActivity?: () => void;
 }
 
 function resolveWorkPath(input: string): string | null {
@@ -458,8 +462,13 @@ async function processQueuedMessage(task: QueuedMessageTask): Promise<void> {
   const { data } = task;
   const { sender, message } = data;
   const startTime = Date.now();
-  const timeout = MESSAGE_TIMEOUT_MS;
+  const timeout = MESSAGE_IDLE_TIMEOUT_MS;
   const queueDelay = startTime - task.enqueuedAt;
+  let timeoutTimer: ReturnType<typeof setTimeout> | undefined;
+  let watchdogSettled = false;
+  let lastActivityAt = startTime;
+  let activityCount = 0;
+  let resolveTimeout: ((result: 'timeout') => void) | null = null;
 
   logger.info('Processing queued message', {
     messageId: message.message_id,
@@ -470,15 +479,48 @@ async function processQueuedMessage(task: QueuedMessageTask): Promise<void> {
     remainingQueueDepth: getChatQueueLength(message.chat_id),
   });
 
-  const processingPromise = handleMessageInternal(task, startTime);
-  let timeoutTimer: ReturnType<typeof setTimeout> | undefined;
+  const clearWatchdog = () => {
+    if (timeoutTimer) {
+      clearTimeout(timeoutTimer);
+      timeoutTimer = undefined;
+    }
+  };
+
+  const scheduleTimeout = () => {
+    if (watchdogSettled) {
+      return;
+    }
+
+    clearWatchdog();
+    timeoutTimer = setTimeout(() => {
+      watchdogSettled = true;
+      resolveTimeout?.('timeout');
+    }, timeout);
+  };
+
+  const markActivity = () => {
+    if (watchdogSettled) {
+      return;
+    }
+
+    lastActivityAt = Date.now();
+    activityCount += 1;
+    scheduleTimeout();
+  };
+
+  const processingPromise = handleMessageInternal(task, startTime, { onActivity: markActivity }).finally(() => {
+    watchdogSettled = true;
+    clearWatchdog();
+  });
+  const timeoutPromise = new Promise<'timeout'>((resolve) => {
+    resolveTimeout = resolve;
+    scheduleTimeout();
+  });
 
   try {
     const result = await Promise.race<'completed' | 'timeout'>([
       processingPromise.then(() => 'completed' as const),
-      new Promise<'timeout'>((resolve) => {
-        timeoutTimer = setTimeout(() => resolve('timeout'), timeout);
-      }),
+      timeoutPromise,
     ]);
 
     if (result === 'completed') {
@@ -486,35 +528,38 @@ async function processQueuedMessage(task: QueuedMessageTask): Promise<void> {
     }
 
     const duration = Date.now() - startTime;
-    logger.error('Message processing timeout', {
+    const idleDuration = Date.now() - lastActivityAt;
+    logger.error('Message processing idle timeout', {
       messageId: message.message_id,
       chatId: message.chat_id,
       duration,
+      idleDuration,
       timeout,
+      activityCount,
     });
 
     if (MESSAGE_TIMEOUT_ACTION === 'kill') {
       await messageService.sendTextMessage(
         message.chat_id,
-        `消息处理超时（${Math.round(timeout / 1000)}秒），已终止当前任务。请重试或使用 /new 重置会话。`,
+        `消息处理超时（${Math.round(timeout / 1000)}秒内无进展），已终止当前任务。请重试或使用 /new 重置会话。`,
       ).catch(error => {
         logger.error('Failed to send timeout notification', { error });
       });
 
-      logger.info('Terminating session due to timeout', { chatId: message.chat_id });
+      logger.info('Terminating session due to idle timeout', { chatId: message.chat_id });
       await chatManager.interrupt(message.chat_id).catch(() => 'error');
       await chatManager.reset(message.chat_id);
     } else {
       await messageService.sendTextMessage(
         message.chat_id,
-        `消息处理超时（${Math.round(timeout / 1000)}秒），当前任务仍在收尾，后续消息会继续排队。`,
+        `消息处理超时（${Math.round(timeout / 1000)}秒内无进展），当前任务仍在收尾，后续消息会继续排队。`,
       ).catch(error => {
         logger.error('Failed to send timeout notification', { error });
       });
     }
 
     await processingPromise.catch(error => {
-      logger.warn('Queued message finished after timeout', {
+      logger.warn('Queued message finished after idle timeout', {
         messageId: message.message_id,
         chatId: message.chat_id,
         error: error instanceof Error ? error.message : String(error),
@@ -529,17 +574,19 @@ async function processQueuedMessage(task: QueuedMessageTask): Promise<void> {
       error,
     });
   } finally {
-    if (timeoutTimer) {
-      clearTimeout(timeoutTimer);
-    }
+    clearWatchdog();
   }
 }
 
-async function handleMessageInternal(task: QueuedMessageTask, startTime: number): Promise<void> {
+async function handleMessageInternal(
+  task: QueuedMessageTask,
+  startTime: number,
+  options?: MessageProcessingOptions,
+): Promise<void> {
   const { data, text } = task;
   const { message } = data;
   const chatId = message.chat_id;
-  const timeout = MESSAGE_TIMEOUT_MS;
+  const timeout = MESSAGE_IDLE_TIMEOUT_MS;
 
   logger.info('Received chat text', {
     messageId: message.message_id,
@@ -672,7 +719,7 @@ async function handleMessageInternal(task: QueuedMessageTask, startTime: number)
 
   const reactionId = await messageService.addReaction(message.message_id, 'Typing');
   try {
-    await chatManager.sendMessage(chatId, text);
+    await chatManager.sendMessage(chatId, text, { onActivity: options?.onActivity });
   } finally {
     if (reactionId) {
       await messageService.removeReaction(message.message_id, reactionId).catch(error => {

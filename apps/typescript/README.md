@@ -18,9 +18,24 @@ cp .env.example .env
 npm run dev
 ```
 
+## 生产运行（PM2）
+
+```bash
+npm run build
+pm2 start ecosystem.config.js
+pm2 save
+```
+
+常用命令：
+
+- `pm2 status`
+- `pm2 logs cc-feishu-ts`
+- `pm2 restart cc-feishu-ts`
+
 ## 主要目录
 
 - [`src`](./src) - 应用源码
 - [`INSTALL.md`](./INSTALL.md) - 安装、配置与启动说明
 - [`CLAUDE.md`](./CLAUDE.md) - 实现说明
+- [`docs/pm2-win11-pidusage-fix.md`](./docs/pm2-win11-pidusage-fix.md) - PM2 在 Windows 11 下的 `wmic ENOENT` 修复记录
 - [`docs`](./docs) - TypeScript 相关协议和设计文档

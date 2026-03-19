@@ -1,5 +1,5 @@
 ﻿import logger from '../utils/logger';
-import type { ChatAgent, OnErrorCallback, OnResponseCallback } from '../agent/types';
+import type { ChatAgent, OnErrorCallback, OnResponseCallback, SendMessageOptions } from '../agent/types';
 import { CLILauncher } from './launcher';
 import { CLIBridge } from './bridge';
 
@@ -72,7 +72,7 @@ export class Agent implements ChatAgent {
     }
   }
 
-  async sendMessage(text: string, onComplete?: () => Promise<void>): Promise<void> {
+  async sendMessage(text: string, options?: SendMessageOptions): Promise<void> {
     if (this.destroyed) {
       logger.warn('[Agent] Cannot send message, agent destroyed', {
         chatId: this.chatId,
@@ -94,7 +94,7 @@ export class Agent implements ChatAgent {
       await this.destroy(err as Error);
       throw err;
     }
-      await this.bridge.sendUserMessage(text, onComplete);
+    await this.bridge.sendUserMessage(text, options?.onComplete);
   }
 
   interrupt(): boolean {

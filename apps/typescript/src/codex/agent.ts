@@ -1,5 +1,5 @@
 import logger from '../utils/logger';
-import type { ChatAgent, OnErrorCallback, OnResponseCallback } from '../agent/types';
+import type { ChatAgent, OnErrorCallback, OnResponseCallback, SendMessageOptions } from '../agent/types';
 import {
   CodexMinimalSession,
   ConcurrentTurnError,
@@ -45,7 +45,7 @@ export class CodexAgent implements ChatAgent {
     });
   }
 
-  async sendMessage(text: string): Promise<void> {
+  async sendMessage(text: string, options?: SendMessageOptions): Promise<void> {
     if (this.destroyed) {
       logger.warn('[CodexAgent] Cannot send message, agent destroyed', {
         chatId: this.chatId,
@@ -62,7 +62,7 @@ export class CodexAgent implements ChatAgent {
     });
 
     try {
-      const result = await this.session.sendMessage(text);
+      const result = await this.session.sendMessage(text, options);
       this.initialized = true;
       logger.info('[CodexAgent] Received response', {
         chatId: this.chatId,

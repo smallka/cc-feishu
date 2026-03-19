@@ -13,6 +13,10 @@ export interface SendMessageResult {
   threadId: string | null;
 }
 
+export interface CodexMinimalSendMessageOptions {
+  onActivity?: () => void;
+}
+
 export class ConcurrentTurnError extends Error {
   constructor(message = 'A Codex turn is already in progress for this session.') {
     super(message);
@@ -53,7 +57,7 @@ export class CodexMinimalSession {
     this.resumeSessionId = options.resumeSessionId;
   }
 
-  async sendMessage(text: string): Promise<SendMessageResult> {
+  async sendMessage(text: string, options?: CodexMinimalSendMessageOptions): Promise<SendMessageResult> {
     if (this.inFlightPromise) {
       logger.warn('[CodexMinimalSession] Rejecting concurrent turn', {
         workingDirectory: this.workingDirectory,
@@ -69,7 +73,7 @@ export class CodexMinimalSession {
       messageText: text,
     });
 
-    const runPromise = this.runTurn(text);
+    const runPromise = this.runTurn(text, options);
     this.inFlightPromise = runPromise;
 
     try {
@@ -106,7 +110,7 @@ export class CodexMinimalSession {
     return this.thread?.id ?? null;
   }
 
-  private async runTurn(text: string): Promise<SendMessageResult> {
+  private async runTurn(text: string, options?: CodexMinimalSendMessageOptions): Promise<SendMessageResult> {
     const thread = await this.ensureThread();
     const abortController = new AbortController();
     this.abortController = abortController;
@@ -125,7 +129,11 @@ export class CodexMinimalSession {
         });
 
         try {
-          const result = await thread.run(text, { signal: abortController.signal });
+          notifyActivity(options?.onActivity);
+          const result = await thread.run(text, {
+            signal: abortController.signal,
+            onEvent: () => notifyActivity(options?.onActivity),
+          });
           logger.info('[CodexMinimalSession] Completed thread.run', {
             workingDirectory: this.workingDirectory,
             threadId: thread.id,
@@ -222,6 +230,18 @@ export class CodexMinimalSession {
     });
 
     return this.thread;
+  }
+}
+
+function notifyActivity(onActivity?: () => void): void {
+  if (!onActivity) {
+    return;
+  }
+
+  try {
+    onActivity();
+  } catch (error) {
+    logger.warn('[CodexMinimalSession] Activity callback failed', { error });
   }
 }
 

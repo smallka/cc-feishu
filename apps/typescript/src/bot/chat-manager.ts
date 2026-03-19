@@ -2,7 +2,7 @@
 import messageService from '../services/message.service';
 import { createAgent } from '../agent/factory';
 import type { AgentProvider } from '../config';
-import type { ChatAgent } from '../agent/types';
+import type { ChatAgent, SendMessageOptions } from '../agent/types';
 import type { DirectorySummary, SessionSummary, SessionTarget } from '../agent/session-history';
 import {
   findSessionById as findClaudeSessionById,
@@ -78,7 +78,7 @@ export class ChatManager {
     return provider === 'claude' || provider === 'codex';
   }
 
-  async sendMessage(chatId: string, text: string): Promise<void> {
+  async sendMessage(chatId: string, text: string, options?: SendMessageOptions): Promise<void> {
     const provider = this.getChatProvider(chatId);
     const agent = this.getOrCreateAgent(chatId);
     logger.info('[ChatManager] Sending message', {
@@ -89,7 +89,7 @@ export class ChatManager {
       messageLength: text.length,
       messageText: text,
     });
-    await agent.sendMessage(text);
+    await agent.sendMessage(text, options);
   }
 
   async interrupt(chatId: string): Promise<'success' | 'timeout' | 'no_session' | 'error'> {

@@ -8,9 +8,14 @@ export interface ThreadRunResult {
   usage: unknown;
 }
 
+export interface ThreadRunOptions {
+  signal?: AbortSignal;
+  onEvent?: (event: unknown) => void;
+}
+
 export interface ThreadLike {
   readonly id: string | null;
-  run(input: string, options?: { signal?: AbortSignal }): Promise<ThreadRunResult>;
+  run(input: string, options?: ThreadRunOptions): Promise<ThreadRunResult>;
 }
 
 export interface CodexLike {
