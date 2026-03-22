@@ -8,6 +8,18 @@ export interface ThreadRunResult {
   usage: unknown;
 }
 
+export interface ThreadInputTextItem {
+  type: 'text';
+  text: string;
+}
+
+export interface ThreadInputImageItem {
+  type: 'local_image';
+  path: string;
+}
+
+export type ThreadInputItem = ThreadInputTextItem | ThreadInputImageItem;
+
 export interface ThreadRunOptions {
   signal?: AbortSignal;
   onEvent?: (event: unknown) => void;
@@ -15,7 +27,7 @@ export interface ThreadRunOptions {
 
 export interface ThreadLike {
   readonly id: string | null;
-  run(input: string, options?: ThreadRunOptions): Promise<ThreadRunResult>;
+  run(input: string | ThreadInputItem[], options?: ThreadRunOptions): Promise<ThreadRunResult>;
 }
 
 export interface CodexLike {

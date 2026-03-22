@@ -1,4 +1,4 @@
-import { ThreadLike, loadCodexSdk } from './loader';
+import { ThreadInputItem, ThreadLike, loadCodexSdk } from './loader';
 import logger from '../utils/logger';
 
 export interface CodexMinimalSessionOptions {
@@ -15,6 +15,7 @@ export interface SendMessageResult {
 
 export interface CodexMinimalSendMessageOptions {
   onActivity?: () => void;
+  imagePaths?: string[];
 }
 
 export class ConcurrentTurnError extends Error {
@@ -71,6 +72,7 @@ export class CodexMinimalSession {
       threadId: this.getThreadId(),
       messageLength: text.length,
       messageText: text,
+      imageCount: options?.imagePaths?.length ?? 0,
     });
 
     const runPromise = this.runTurn(text, options);
@@ -115,6 +117,7 @@ export class CodexMinimalSession {
     const abortController = new AbortController();
     this.abortController = abortController;
     let attempt = 0;
+    const input = buildThreadInput(text, options?.imagePaths);
 
     try {
       while (true) {
@@ -124,13 +127,14 @@ export class CodexMinimalSession {
           threadId: thread.id,
           messageLength: text.length,
           messageText: text,
+          imageCount: options?.imagePaths?.length ?? 0,
           attempt: attemptNumber,
           maxAttempts: MAX_TRANSIENT_RUN_RETRIES + 1,
         });
 
         try {
           notifyActivity(options?.onActivity);
-          const result = await thread.run(text, {
+          const result = await thread.run(input, {
             signal: abortController.signal,
             onEvent: () => notifyActivity(options?.onActivity),
           });
@@ -243,6 +247,23 @@ function notifyActivity(onActivity?: () => void): void {
   } catch (error) {
     logger.warn('[CodexMinimalSession] Activity callback failed', { error });
   }
+}
+
+function buildThreadInput(text: string, imagePaths?: string[]): string | ThreadInputItem[] {
+  const sanitizedImagePaths = (imagePaths ?? []).filter(Boolean);
+  if (sanitizedImagePaths.length === 0) {
+    return text;
+  }
+
+  const items: ThreadInputItem[] = [
+    { type: 'text', text },
+  ];
+
+  for (const imagePath of sanitizedImagePaths) {
+    items.push({ type: 'local_image', path: imagePath });
+  }
+
+  return items;
 }
 
 function isAbortError(error: unknown): boolean {

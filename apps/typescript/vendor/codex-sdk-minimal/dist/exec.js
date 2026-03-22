@@ -69,6 +69,12 @@ export class CodexExec {
       commandArgs.push("--model", args.model);
     }
 
+    if (args.images && args.images.length > 0) {
+      for (const imagePath of args.images) {
+        commandArgs.push("--image", imagePath);
+      }
+    }
+
     if (args.sandboxMode) {
       commandArgs.push("--sandbox", args.sandboxMode);
     }

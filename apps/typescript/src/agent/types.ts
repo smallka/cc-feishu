@@ -5,6 +5,7 @@ export type OnActivityCallback = () => void;
 export interface SendMessageOptions {
   onActivity?: OnActivityCallback;
   onComplete?: () => Promise<void>;
+  imagePaths?: string[];
 }
 
 export interface ChatAgent {

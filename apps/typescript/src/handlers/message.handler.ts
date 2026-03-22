@@ -32,9 +32,24 @@ interface MessageEvent {
   };
 }
 
+interface TextMessageContent {
+  text?: string;
+}
+
+interface ImageMessageContent {
+  image_key?: string;
+}
+
+interface FileMessageContent {
+  file_key?: string;
+  file_name?: string;
+}
+
 interface QueuedMessageTask {
   data: MessageEvent;
   text: string;
+  messageType: string;
+  imagePaths?: string[];
   enqueuedAt: number;
 }
 
@@ -262,6 +277,10 @@ async function sendMenu(chatId: string, context: Omit<MenuContext, 'expiresAt'>)
 }
 
 export function handleMessage(data: MessageEvent): Promise<void> {
+  return prepareMessageTask(data);
+}
+
+async function prepareMessageTask(data: MessageEvent): Promise<void> {
   const { message, sender } = data;
   const chatId = message.chat_id;
 
@@ -270,59 +289,30 @@ export function handleMessage(data: MessageEvent): Promise<void> {
       messageId: message.message_id,
       chatId,
     });
-    return Promise.resolve();
+    return;
   }
 
   if (processedMessages.has(message.message_id)) {
     logger.debug('Skipping duplicate message', { messageId: message.message_id });
-    return Promise.resolve();
+    return;
   }
 
-  if (message.message_type !== 'text') {
-    logger.debug('Skipping non-text message', {
-      messageId: message.message_id,
-      chatId,
-      messageType: message.message_type,
-    });
-    return Promise.resolve();
-  }
-
-  let content: { text?: string };
-  try {
-    content = JSON.parse(message.content) as { text?: string };
-  } catch (error) {
-    logger.error('Failed to parse message content', {
-      messageId: message.message_id,
-      chatId,
-      error,
-    });
-    return Promise.resolve();
-  }
-
-  const text = (content.text || '').trim();
-  if (!text) {
-    logger.debug('Skipping empty text message', {
-      messageId: message.message_id,
-      chatId,
-    });
-    return Promise.resolve();
+  const task = await createQueuedTask(data);
+  if (!task) {
+    return;
   }
 
   rememberProcessedMessage(message.message_id);
 
-  if (text === '/stop') {
-    return handleImmediateStop(chatId);
+  if (task.messageType === 'text' && task.text === '/stop') {
+    await handleImmediateStop(chatId);
+    return;
   }
 
-  if (text === '/new') {
-    return handleImmediateReset(chatId);
+  if (task.messageType === 'text' && task.text === '/new') {
+    await handleImmediateReset(chatId);
+    return;
   }
-
-  const task: QueuedMessageTask = {
-    data,
-    text,
-    enqueuedAt: Date.now(),
-  };
 
   enqueueTask(task);
 
@@ -330,12 +320,12 @@ export function handleMessage(data: MessageEvent): Promise<void> {
     messageId: message.message_id,
     chatId,
     senderId: sender.sender_id.open_id,
-    provider: chatManager.getProvider(),
-    textLength: text.length,
+    provider: chatManager.getProvider(chatId),
+    messageType: task.messageType,
+    textLength: task.text.length,
+    imageCount: task.imagePaths?.length ?? 0,
     queueDepth: getChatQueueLength(chatId),
   });
-
-  return Promise.resolve();
 }
 
 export async function stopMessageHandling(): Promise<void> {
@@ -474,8 +464,10 @@ async function processQueuedMessage(task: QueuedMessageTask): Promise<void> {
     messageId: message.message_id,
     chatId: message.chat_id,
     senderId: sender.sender_id.open_id,
-    provider: chatManager.getProvider(),
+    provider: chatManager.getProvider(message.chat_id),
+    messageType: task.messageType,
     queueDelay,
+    imageCount: task.imagePaths?.length ?? 0,
     remainingQueueDepth: getChatQueueLength(message.chat_id),
   });
 
@@ -592,8 +584,10 @@ async function handleMessageInternal(
     messageId: message.message_id,
     chatId,
     provider: chatManager.getProvider(chatId),
+    messageType: task.messageType,
     text,
     textLength: text.length,
+    imageCount: task.imagePaths?.length ?? 0,
   });
 
   if (text.startsWith('/')) {
@@ -719,7 +713,10 @@ async function handleMessageInternal(
 
   const reactionId = await messageService.addReaction(message.message_id, 'Typing');
   try {
-    await chatManager.sendMessage(chatId, text, { onActivity: options?.onActivity });
+    await chatManager.sendMessage(chatId, text, {
+      onActivity: options?.onActivity,
+      imagePaths: task.imagePaths,
+    });
   } finally {
     if (reactionId) {
       await messageService.removeReaction(message.message_id, reactionId).catch(error => {
@@ -740,5 +737,168 @@ async function handleMessageInternal(
       duration,
       threshold: timeout * 0.5,
     });
+  }
+}
+
+async function createQueuedTask(data: MessageEvent): Promise<QueuedMessageTask | null> {
+  const { message } = data;
+
+  if (message.message_type === 'text') {
+    return createTextTask(data);
+  }
+
+  if (message.message_type === 'image') {
+    return createImageTask(data);
+  }
+
+  if (message.message_type === 'file') {
+    return createFileTask(data);
+  }
+
+  logger.debug('Skipping unsupported message type', {
+    messageId: message.message_id,
+    chatId: message.chat_id,
+    messageType: message.message_type,
+  });
+  return null;
+}
+
+function createTextTask(data: MessageEvent): QueuedMessageTask | null {
+  const { message } = data;
+
+  let content: TextMessageContent;
+  try {
+    content = JSON.parse(message.content) as TextMessageContent;
+  } catch (error) {
+    logger.error('Failed to parse text message content', {
+      messageId: message.message_id,
+      chatId: message.chat_id,
+      error,
+    });
+    return null;
+  }
+
+  const text = (content.text || '').trim();
+  if (!text) {
+    logger.debug('Skipping empty text message', {
+      messageId: message.message_id,
+      chatId: message.chat_id,
+    });
+    return null;
+  }
+
+  return {
+    data,
+    text,
+    messageType: 'text',
+    enqueuedAt: Date.now(),
+  };
+}
+
+async function createImageTask(data: MessageEvent): Promise<QueuedMessageTask | null> {
+  const { message } = data;
+  const chatId = message.chat_id;
+
+  if (chatManager.getProvider(chatId) !== 'codex') {
+    await messageService.sendTextMessage(chatId, '当前仅 Codex 支持图片消息，请先使用 /agent 切换到 Codex。');
+    return null;
+  }
+
+  let content: ImageMessageContent;
+  try {
+    content = JSON.parse(message.content) as ImageMessageContent;
+  } catch (error) {
+    logger.error('Failed to parse image message content', {
+      messageId: message.message_id,
+      chatId,
+      error,
+    });
+    return null;
+  }
+
+  const imageKey = content.image_key?.trim();
+  if (!imageKey) {
+    logger.warn('Skipping image message without image key', {
+      messageId: message.message_id,
+      chatId,
+    });
+    return null;
+  }
+
+  try {
+    const imagePath = await messageService.downloadMessageImage(message.message_id, imageKey);
+    return {
+      data,
+      text: '用户发送了一张图片，请结合图片内容继续处理当前请求。',
+      messageType: 'image',
+      imagePaths: [imagePath],
+      enqueuedAt: Date.now(),
+    };
+  } catch (error) {
+    logger.error('Failed to download image message resource', {
+      messageId: message.message_id,
+      chatId,
+      imageKey,
+      error,
+    });
+    await messageService.sendTextMessage(chatId, '图片下载失败，请稍后重试。');
+    return null;
+  }
+}
+
+async function createFileTask(data: MessageEvent): Promise<QueuedMessageTask | null> {
+  const { message } = data;
+  const chatId = message.chat_id;
+
+  if (chatManager.getProvider(chatId) !== 'codex') {
+    await messageService.sendTextMessage(chatId, '当前仅 Codex 支持文件消息，请先使用 /agent 切换到 Codex。');
+    return null;
+  }
+
+  let content: FileMessageContent;
+  try {
+    content = JSON.parse(message.content) as FileMessageContent;
+  } catch (error) {
+    logger.error('Failed to parse file message content', {
+      messageId: message.message_id,
+      chatId,
+      error,
+    });
+    return null;
+  }
+
+  const fileKey = content.file_key?.trim();
+  if (!fileKey) {
+    logger.warn('Skipping file message without file key', {
+      messageId: message.message_id,
+      chatId,
+    });
+    return null;
+  }
+
+  try {
+    const filePath = await messageService.downloadMessageFile(message.message_id, fileKey, content.file_name);
+    const prompt = [
+      `用户发送了一个文件${content.file_name ? `：${content.file_name}` : ''}。`,
+      `文件已保存到本地路径：${filePath}`,
+      '请先读取该文件，再继续处理当前请求。',
+    ].join('\n');
+
+    return {
+      data,
+      text: prompt,
+      messageType: 'file',
+      enqueuedAt: Date.now(),
+    };
+  } catch (error) {
+    logger.error('Failed to download file message resource', {
+      messageId: message.message_id,
+      chatId,
+      fileKey,
+      fileName: content.file_name,
+      error,
+    });
+    await messageService.sendTextMessage(chatId, '文件下载失败，请稍后重试。');
+    return null;
   }
 }

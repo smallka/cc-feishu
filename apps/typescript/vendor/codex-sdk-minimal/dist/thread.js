@@ -1,16 +1,23 @@
-﻿function normalizeInput(input) {
+function normalizeInput(input) {
   if (typeof input === "string") {
-    return input;
+    return { text: input, images: [] };
   }
 
   const textParts = [];
+  const images = [];
   for (const item of input) {
     if (item && item.type === "text" && typeof item.text === "string") {
       textParts.push(item.text);
     }
+    if (item && item.type === "local_image" && typeof item.path === "string") {
+      images.push(item.path);
+    }
   }
 
-  return textParts.join("\n\n");
+  return {
+    text: textParts.join("\n\n"),
+    images,
+  };
 }
 
 export class Thread {
@@ -30,9 +37,11 @@ export class Thread {
     let finalResponse = "";
     let usage = null;
     let turnFailure = null;
+    const normalizedInput = normalizeInput(input);
 
     const generator = this.exec.run({
-      input: normalizeInput(input),
+      input: normalizedInput.text,
+      images: normalizedInput.images,
       baseUrl: this.options.baseUrl,
       apiKey: this.options.apiKey,
       threadId: this.idValue,
