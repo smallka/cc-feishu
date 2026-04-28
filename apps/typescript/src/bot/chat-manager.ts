@@ -5,13 +5,11 @@ import type { AgentProvider } from '../config';
 import type { ChatAgent, SendMessageOptions } from '../agent/types';
 import type { DirectorySummary, SessionSummary, SessionTarget } from '../agent/session-history';
 import {
-  findSessionById as findClaudeSessionById,
   getRecentDirectories as getClaudeRecentDirectories,
   getSessionList as getClaudeSessionList,
   getValidSessions as getClaudeValidSessions,
 } from '../claude/session-scanner';
 import {
-  findSessionById as findCodexSessionById,
   getRecentDirectories as getCodexRecentDirectories,
   getSessionList as getCodexSessionList,
   getValidSessions as getCodexValidSessions,
@@ -291,13 +289,12 @@ export class ChatManager {
   }
 
   resolveResumeTargetBySessionId(chatId: string, sessionId: string): SessionTarget | null {
-    switch (this.getChatProvider(chatId)) {
-      case 'codex':
-        return findCodexSessionById(sessionId);
-      case 'claude':
-      default:
-        return findClaudeSessionById(sessionId);
+    const normalizedId = sessionId.trim();
+    if (!normalizedId) {
+      return null;
     }
+
+    return this.getSessionListForChat(chatId).find(item => item.sessionId === normalizedId) ?? null;
   }
 
   async resumeSession(chatId: string, sessionId: string): Promise<string> {
