@@ -15,6 +15,20 @@ interface WebSocketStatus {
   };
 }
 
+const ignoreEvent = () => undefined;
+
+export function createEventDispatcher(): lark.EventDispatcher {
+  return new lark.EventDispatcher({}).register({
+    'im.message.receive_v1': (data) => {
+      void handleMessage(data as any).catch((error) => {
+        logger.error('Error queueing message event', { error });
+      });
+    },
+    'im.message.reaction.created_v1': ignoreEvent,
+    'im.message.reaction.deleted_v1': ignoreEvent,
+  });
+}
+
 class WebSocketManager {
   private wsClient: lark.WSClient | null = null;
   private state: WebSocketState = 'stopped';
@@ -89,13 +103,7 @@ class WebSocketManager {
         autoReconnect: true,
       });
 
-      const eventDispatcher = new lark.EventDispatcher({}).register({
-        'im.message.receive_v1': (data) => {
-          void handleMessage(data as any).catch((error) => {
-            logger.error('Error queueing message event', { error });
-          });
-        },
-      });
+      const eventDispatcher = createEventDispatcher();
 
       await wsClient.start({ eventDispatcher });
 
