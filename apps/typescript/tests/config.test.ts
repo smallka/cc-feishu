@@ -56,7 +56,7 @@ async function main(): Promise<void> {
       });
 
       withEnv({
-        AGENT_WORK_ROOT: undefined,
+        AGENT_WORK_ROOT: '',
         CLAUDE_WORK_ROOT: 'C:\\work\\legacy-root',
         CHAT_BINDINGS_FILE: undefined,
       }, () => {
@@ -66,8 +66,8 @@ async function main(): Promise<void> {
 
       process.chdir(sandboxRoot);
       withEnv({
-        AGENT_WORK_ROOT: undefined,
-        CLAUDE_WORK_ROOT: undefined,
+        AGENT_WORK_ROOT: '',
+        CLAUDE_WORK_ROOT: '',
         CHAT_BINDINGS_FILE: 'data/chat-bindings.json',
       }, () => {
         const config = loadConfig();

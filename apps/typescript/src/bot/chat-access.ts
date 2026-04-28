@@ -5,6 +5,7 @@ export interface ResolveChatAccessOptions {
   senderOpenId: string;
   allowedOpenIds: readonly string[];
   binding: ChatBinding | null;
+  isDirectChat?: boolean;
   bindingValid?: boolean;
   hasActiveMenuSelection?: boolean;
 }
@@ -21,6 +22,7 @@ export function resolveChatAccess(options: ResolveChatAccessOptions): ChatAccess
     senderOpenId,
     allowedOpenIds,
     binding,
+    isDirectChat = false,
     bindingValid = true,
     hasActiveMenuSelection = false,
   } = options;
@@ -37,7 +39,7 @@ export function resolveChatAccess(options: ResolveChatAccessOptions): ChatAccess
     return { kind: 'invalid_binding' };
   }
 
-  if (binding || canOperateWithoutBinding(text, hasActiveMenuSelection)) {
+  if (binding || isDirectChat || canOperateWithoutBinding(text, hasActiveMenuSelection)) {
     return { kind: 'allowed' };
   }
 

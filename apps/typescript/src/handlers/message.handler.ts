@@ -31,6 +31,7 @@ interface MessageEvent {
     message_type: string;
     content: string;
     chat_id: string;
+    chat_type?: string;
   };
 }
 
@@ -328,6 +329,10 @@ function getInvalidStoredBinding(chatId: string): { cwd: string; updatedAt: stri
   return isDirectoryAvailable(binding.cwd) ? null : binding;
 }
 
+function isDirectChat(chatType: string | undefined): boolean {
+  return chatType === 'p2p_chat';
+}
+
 export function handleMessage(data: MessageEvent): Promise<void> {
   return prepareMessageTask(data);
 }
@@ -365,6 +370,7 @@ async function prepareMessageTask(data: MessageEvent): Promise<void> {
     senderOpenId: sender.sender_id.open_id,
     allowedOpenIds: config.feishu.allowedOpenIds,
     binding,
+    isDirectChat: isDirectChat(message.chat_type),
     bindingValid,
     hasActiveMenuSelection,
   });
