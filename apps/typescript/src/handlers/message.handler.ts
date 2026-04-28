@@ -60,7 +60,7 @@ interface MessageProcessingOptions {
 }
 
 function resolveWorkPath(input: string): string | null {
-  const target = isAbsolute(input) ? input : resolve(config.claude.workRoot, input);
+  const target = isAbsolute(input) ? input : resolve(config.agent.workRoot, input);
   if (!isDirectoryAvailable(target)) {
     return null;
   }
@@ -178,7 +178,7 @@ function buildResumeMenu(chatId: string): MenuContext | null {
   const currentCwd = chatManager.getCurrentCwd(chatId);
   const total = chatManager.getSessionCount(chatId);
   const descriptionLines = [`工作目录: \`${currentCwd}\``];
-  if (currentCwd === config.claude.workRoot) {
+  if (currentCwd === config.agent.workRoot) {
     descriptionLines.push('当前为默认目录，已显示所有目录最近会话。');
   }
   if (total > sessions.length) {
@@ -721,7 +721,7 @@ async function handleMessageInternal(
 
   if (text.startsWith('/cd ')) {
     const input = text.slice(4).trim();
-    const target = input === '.' ? config.claude.workRoot : resolveWorkPath(input);
+    const target = input === '.' ? config.agent.workRoot : resolveWorkPath(input);
     if (!target) {
       await messageService.sendTextMessage(chatId, `目录不存在: ${input}`);
       return;

@@ -13,9 +13,9 @@ interface Config {
   };
   agent: {
     provider: AgentProvider;
+    workRoot: string;
   };
   claude: {
-    workRoot: string;
     model: string;
   };
   app: {
@@ -79,6 +79,31 @@ function parseAllowedOpenIds(): string[] {
   return Array.from(new Set([...allowedOpenIds, ownerOpenId]));
 }
 
+function resolveAgentWorkRoot(): string {
+  const preferred = (process.env.AGENT_WORK_ROOT || '').trim();
+  if (preferred) {
+    return preferred;
+  }
+
+  const legacy = (process.env.CLAUDE_WORK_ROOT || '').trim();
+  if (legacy) {
+    return legacy;
+  }
+
+  return process.cwd();
+}
+
+function resolveStoragePath(rawValue: string | undefined, fallbackRelativePath: string): string {
+  const normalized = (rawValue || '').trim();
+  if (!normalized) {
+    return path.resolve(process.cwd(), fallbackRelativePath);
+  }
+
+  return path.isAbsolute(normalized)
+    ? normalized
+    : path.resolve(process.cwd(), normalized);
+}
+
 const config: Config = {
   feishu: {
     appId: process.env.FEISHU_APP_ID || '',
@@ -87,9 +112,9 @@ const config: Config = {
   },
   agent: {
     provider: resolveAgentProvider(),
+    workRoot: resolveAgentWorkRoot(),
   },
   claude: {
-    workRoot: process.env.CLAUDE_WORK_ROOT || process.cwd(),
     model: process.env.CLAUDE_MODEL || 'claude-opus-4-6',
   },
   app: {
@@ -98,7 +123,7 @@ const config: Config = {
     singleInstancePort: parsePort('SINGLE_INSTANCE_PORT', 8652),
   },
   storage: {
-    chatBindingsFile: process.env.CHAT_BINDINGS_FILE || path.resolve(process.cwd(), 'data', 'chat-bindings.json'),
+    chatBindingsFile: resolveStoragePath(process.env.CHAT_BINDINGS_FILE, path.join('data', 'chat-bindings.json')),
   },
 };
 

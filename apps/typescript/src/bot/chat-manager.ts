@@ -64,7 +64,7 @@ export class ChatManager {
 
   constructor(options: ChatManagerOptions = {}) {
     this.bindingStore = options.bindingStore ?? chatBindingStore;
-    this.defaultCwd = options.defaultCwd ?? config.claude.workRoot;
+    this.defaultCwd = options.defaultCwd ?? config.agent.workRoot;
     this.defaultProvider = options.defaultProvider ?? config.agent.provider;
     this.agentFactory = options.agentFactory ?? createAgent;
     this.startTime = Date.now();
