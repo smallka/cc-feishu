@@ -25,3 +25,5 @@ Thumbs.db
 # Local state
 .sessions.json
 .claude/settings.local.json
+data/chat-bindings.json
+data/chat-bindings.json.e2e-backup-*

@@ -6,7 +6,7 @@ import { chatManager } from '../bot/chat-manager';
 import { resolveChatAccess } from '../bot/chat-access';
 import { chatBindingStore } from '../bot/chat-binding-store';
 import menuContext, { renderMenu, type MenuAction, type MenuContext } from '../bot/menu-context';
-import type { DirectorySummary, SessionSummary } from '../agent/session-history';
+import type { DirectorySummary, SessionSummary, SessionTarget } from '../agent/session-history';
 import messageService from '../services/message.service';
 import config, { type AgentProvider } from '../config';
 
@@ -61,10 +61,18 @@ interface MessageProcessingOptions {
 
 function resolveWorkPath(input: string): string | null {
   const target = isAbsolute(input) ? input : resolve(config.claude.workRoot, input);
-  if (!existsSync(target) || !statSync(target).isDirectory()) {
+  if (!isDirectoryAvailable(target)) {
     return null;
   }
   return target;
+}
+
+function isDirectoryAvailable(target: string): boolean {
+  try {
+    return existsSync(target) && statSync(target).isDirectory();
+  } catch {
+    return false;
+  }
 }
 
 function getHelpText(chatId: string): string {
@@ -96,6 +104,15 @@ function getUnauthorizedText(): string {
 
 function getUnboundText(): string {
   return '当前群尚未绑定工作目录，请先使用 /cd <路径> 绑定。';
+}
+
+function getInvalidBindingText(cwd: string): string {
+  return `当前群绑定目录不存在: ${cwd}\n请重新使用 /cd <路径> 绑定。`;
+}
+
+function getResetInvalidBindingText(cwd: string, droppedCount: number): string {
+  const droppedSuffix = droppedCount > 0 ? `，已清空 ${droppedCount} 条排队消息` : '';
+  return `会话已重置${droppedSuffix}。\n${getInvalidBindingText(cwd)}`;
 }
 
 function formatDuration(seconds: number): string {
@@ -232,13 +249,20 @@ function formatProviderSwitchMessage(provider: AgentProvider, result: { changed:
 
 async function executeMenuAction(chatId: string, action: MenuAction): Promise<void> {
   if (action.type === 'resume_session') {
-    await chatManager.switchCwd(chatId, action.cwd);
-    const result = await chatManager.resumeSession(chatId, action.sessionId);
+    const result = await resumeSessionTarget(chatId, {
+      sessionId: action.sessionId,
+      cwd: action.cwd,
+    });
     await messageService.sendTextMessage(chatId, result);
     return;
   }
 
   if (action.type === 'switch_cwd') {
+    if (!isDirectoryAvailable(action.cwd)) {
+      await messageService.sendTextMessage(chatId, getInvalidBindingText(action.cwd));
+      return;
+    }
+
     await chatManager.switchCwd(chatId, action.cwd);
     if (chatManager.supportsSessionResume(chatId)) {
       await messageService.sendCardMessage(chatId, chatManager.listSessions(chatId));
@@ -286,6 +310,24 @@ async function sendMenu(chatId: string, context: Omit<MenuContext, 'expiresAt'>)
   await messageService.sendCardMessage(chatId, renderMenu(activeMenu));
 }
 
+async function resumeSessionTarget(chatId: string, target: SessionTarget): Promise<string> {
+  if (!isDirectoryAvailable(target.cwd)) {
+    return getInvalidBindingText(target.cwd);
+  }
+
+  await chatManager.switchCwd(chatId, target.cwd);
+  return chatManager.resumeSession(chatId, target.sessionId);
+}
+
+function getInvalidStoredBinding(chatId: string): { cwd: string; updatedAt: string } | null {
+  const binding = chatBindingStore.get(chatId);
+  if (!binding) {
+    return null;
+  }
+
+  return isDirectoryAvailable(binding.cwd) ? null : binding;
+}
+
 export function handleMessage(data: MessageEvent): Promise<void> {
   return prepareMessageTask(data);
 }
@@ -314,11 +356,17 @@ async function prepareMessageTask(data: MessageEvent): Promise<void> {
 
   rememberProcessedMessage(message.message_id);
 
+  const binding = chatBindingStore.get(chatId);
+  const bindingValid = !binding || isDirectoryAvailable(binding.cwd);
+  const hasActiveMenuSelection = /^\d$/.test(task.text) && menuContext.get(chatId) !== null;
+
   const access = resolveChatAccess({
     text: task.text,
     senderOpenId: sender.sender_id.open_id,
     allowedOpenIds: config.feishu.allowedOpenIds,
-    binding: chatBindingStore.get(chatId),
+    binding,
+    bindingValid,
+    hasActiveMenuSelection,
   });
 
   if (access.kind === 'unauthorized') {
@@ -328,6 +376,11 @@ async function prepareMessageTask(data: MessageEvent): Promise<void> {
 
   if (access.kind === 'unbound') {
     await messageService.sendTextMessage(chatId, getUnboundText());
+    return;
+  }
+
+  if (access.kind === 'invalid_binding') {
+    await messageService.sendTextMessage(chatId, getInvalidBindingText(binding?.cwd ?? ''));
     return;
   }
 
@@ -384,7 +437,13 @@ async function handleImmediateReset(chatId: string): Promise<void> {
   menuContext.clear(chatId);
   const droppedCount = clearQueuedMessages(chatId);
   await chatManager.interrupt(chatId).catch(() => 'error');
+  const invalidBinding = getInvalidStoredBinding(chatId);
   const cwd = await chatManager.reset(chatId);
+  if (invalidBinding) {
+    await messageService.sendTextMessage(chatId, getResetInvalidBindingText(invalidBinding.cwd, droppedCount));
+    return;
+  }
+
   const droppedSuffix = droppedCount > 0 ? `，已清空 ${droppedCount} 条排队消息` : '';
   await messageService.sendTextMessage(chatId, `会话已重置${droppedSuffix}，可以开始新的对话。\n工作目录: ${cwd}`);
 }
@@ -606,6 +665,7 @@ async function handleMessageInternal(
   const { message } = data;
   const chatId = message.chat_id;
   const timeout = MESSAGE_IDLE_TIMEOUT_MS;
+  const invalidBinding = getInvalidStoredBinding(chatId);
 
   logger.info('Received chat text', {
     messageId: message.message_id,
@@ -627,6 +687,11 @@ async function handleMessageInternal(
   }
 
   if (text === '/stat') {
+    if (invalidBinding) {
+      await messageService.sendTextMessage(chatId, getInvalidBindingText(invalidBinding.cwd));
+      return;
+    }
+
     const info = chatManager.getSessionInfo(chatId);
     await messageService.sendTextMessage(chatId, info);
     return;
@@ -672,6 +737,11 @@ async function handleMessageInternal(
   }
 
   if (text === '/resume') {
+    if (invalidBinding) {
+      await messageService.sendTextMessage(chatId, getInvalidBindingText(invalidBinding.cwd));
+      return;
+    }
+
     if (!chatManager.supportsSessionResume(chatId)) {
       await messageService.sendTextMessage(chatId, chatManager.listSessions(chatId));
       return;
@@ -688,6 +758,11 @@ async function handleMessageInternal(
   }
 
   if (text.startsWith('/resume ')) {
+    if (invalidBinding) {
+      await messageService.sendTextMessage(chatId, getInvalidBindingText(invalidBinding.cwd));
+      return;
+    }
+
     if (!chatManager.supportsSessionResume(chatId)) {
       await messageService.sendTextMessage(chatId, chatManager.listSessions(chatId));
       return;
@@ -716,13 +791,18 @@ async function handleMessageInternal(
         return;
       }
 
-      await chatManager.switchCwd(chatId, target.cwd);
-      const result = await chatManager.resumeSession(chatId, target.sessionId);
+      const result = await resumeSessionTarget(chatId, target);
       await messageService.sendTextMessage(chatId, result);
       return;
     }
 
-    const result = await chatManager.resumeSession(chatId, input);
+    const target = chatManager.resolveResumeTargetBySessionId(chatId, input);
+    if (!target) {
+      await messageService.sendTextMessage(chatId, `会话不存在: ${input}\n使用 /resume 查看可用的 sessions`);
+      return;
+    }
+
+    const result = await resumeSessionTarget(chatId, target);
     await messageService.sendTextMessage(chatId, result);
     return;
   }

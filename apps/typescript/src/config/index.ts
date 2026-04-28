@@ -68,11 +68,22 @@ function parseCsvList(rawValue: string | undefined): string[] {
     .filter(Boolean);
 }
 
+function parseAllowedOpenIds(): string[] {
+  const allowedOpenIds = parseCsvList(process.env.FEISHU_ALLOWED_OPEN_IDS);
+  const ownerOpenId = (process.env.FEISHU_OWNER_OPEN_ID || '').trim();
+
+  if (!ownerOpenId) {
+    return allowedOpenIds;
+  }
+
+  return Array.from(new Set([...allowedOpenIds, ownerOpenId]));
+}
+
 const config: Config = {
   feishu: {
     appId: process.env.FEISHU_APP_ID || '',
     appSecret: process.env.FEISHU_APP_SECRET || '',
-    allowedOpenIds: parseCsvList(process.env.FEISHU_ALLOWED_OPEN_IDS),
+    allowedOpenIds: parseAllowedOpenIds(),
   },
   agent: {
     provider: resolveAgentProvider(),

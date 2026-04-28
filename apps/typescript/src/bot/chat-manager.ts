@@ -290,6 +290,16 @@ export class ChatManager {
     };
   }
 
+  resolveResumeTargetBySessionId(chatId: string, sessionId: string): SessionTarget | null {
+    switch (this.getChatProvider(chatId)) {
+      case 'codex':
+        return findCodexSessionById(sessionId);
+      case 'claude':
+      default:
+        return findClaudeSessionById(sessionId);
+    }
+  }
+
   async resumeSession(chatId: string, sessionId: string): Promise<string> {
     const provider = this.getChatProvider(chatId);
     if (!this.supportsSessionResume(chatId)) {
@@ -502,16 +512,6 @@ export class ChatManager {
       case 'claude':
       default:
         return getClaudeSessionList(cwd, this.defaultCwd);
-    }
-  }
-
-  private resolveResumeTargetBySessionId(chatId: string, sessionId: string): SessionTarget | null {
-    switch (this.getChatProvider(chatId)) {
-      case 'codex':
-        return findCodexSessionById(sessionId);
-      case 'claude':
-      default:
-        return findClaudeSessionById(sessionId);
     }
   }
 

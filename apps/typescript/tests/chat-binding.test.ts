@@ -60,6 +60,66 @@ async function main(): Promise<void> {
     });
 
     assert.deepEqual(resolveChatAccess({
+      text: '/resume',
+      senderOpenId: 'ou_admin',
+      allowedOpenIds: ['ou_admin', 'ou_ops'],
+      binding: null,
+    }), {
+      kind: 'allowed',
+    });
+
+    assert.deepEqual(resolveChatAccess({
+      text: '1',
+      senderOpenId: 'ou_admin',
+      allowedOpenIds: ['ou_admin', 'ou_ops'],
+      binding: null,
+      hasActiveMenuSelection: true,
+    }), {
+      kind: 'allowed',
+    });
+
+    assert.deepEqual(resolveChatAccess({
+      text: '1',
+      senderOpenId: 'ou_admin',
+      allowedOpenIds: ['ou_admin', 'ou_ops'],
+      binding: null,
+      hasActiveMenuSelection: false,
+    }), {
+      kind: 'unbound',
+    });
+
+    assert.deepEqual(resolveChatAccess({
+      text: '继续实现',
+      senderOpenId: 'ou_admin',
+      allowedOpenIds: ['ou_admin', 'ou_ops'],
+      binding: savedBinding,
+      bindingValid: false,
+    }), {
+      kind: 'invalid_binding',
+    });
+
+    assert.deepEqual(resolveChatAccess({
+      text: '/cd',
+      senderOpenId: 'ou_admin',
+      allowedOpenIds: ['ou_admin', 'ou_ops'],
+      binding: savedBinding,
+      bindingValid: false,
+    }), {
+      kind: 'allowed',
+    });
+
+    assert.deepEqual(resolveChatAccess({
+      text: '1',
+      senderOpenId: 'ou_admin',
+      allowedOpenIds: ['ou_admin', 'ou_ops'],
+      binding: savedBinding,
+      bindingValid: false,
+      hasActiveMenuSelection: true,
+    }), {
+      kind: 'allowed',
+    });
+
+    assert.deepEqual(resolveChatAccess({
       text: '继续实现',
       senderOpenId: 'ou_guest',
       allowedOpenIds: ['ou_admin', 'ou_ops'],
