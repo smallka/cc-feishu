@@ -74,12 +74,17 @@ Codex 基础版改为直接启动：
 
 语义如下：
 
-- `idle`：尚未启动 `app-server`，或当前没有活动 turn
+- `idle`：尚未启动 `app-server`
 - `starting`：正在完成 `app-server` 启动与 `initialize`
-- `ready`：握手完成，且已拿到当前 `threadId`
+- `ready`：握手完成，且已拿到当前 `threadId`，当前没有活动 turn
 - `running`：当前有活动 `turnId`
 - `stopping`：已发送 `turn/interrupt`，等待本轮结束
 - `broken`：进程退出、协议损坏、初始化失败；当前 session 失效，只能销毁重建
+
+状态机要求互斥：
+
+- `idle` 只表示“尚未启动”
+- 已启动且可接受新 turn 的空闲状态统一归入 `ready`
 
 ### 4. 线程与回合流程
 
@@ -98,6 +103,17 @@ Codex 基础版改为直接启动：
 后续消息复用同一个 `threadId`，不重新创建 thread。
 
 第一版不实现 `thread/resume`，也不承诺跨进程恢复历史 thread。
+
+### 4.1 协议探针前提
+
+在进入正式实现前，必须先通过一个最小 smoke test 固定以下协议前提；如果任何一条不成立，则需要回到设计阶段修订方案，而不是直接继续实现：
+
+- 直接运行 `codex app-server` 时，默认 transport 确实是 `stdio`
+- stdout 事件流确实是 newline-delimited JSON，可按逐行 JSONL 读取
+- `initialize -> initialized -> thread/start -> turn/start` 这条最小握手链路可以跑通
+- server 可能发出必须响应的 JSON-RPC server request，客户端需要处理而不能只读 notification
+
+第一版计划建立在以上探针结论成立的前提上，因此 smoke test 不只是“能否启动”，还要验证最小协议假设。
 
 ### 5. 通知处理
 
@@ -124,6 +140,13 @@ Codex 基础版改为直接启动：
   - 不把“将自动重试”的临时错误覆盖成最终失败
 
 为避免子线程或内部线程污染主流程，通知处理需按 `threadId` 过滤，只消费当前主线程的事件。
+
+watchdog 活动回调的定义固定为：
+
+- 收到当前主线程的有效 `turn/*` 或 `item/*` notification 时，触发 `onActivity`
+- `turn/start` 发出前可主动触发一次 `onActivity`，保持与当前调用时序兼容
+- stderr 输出不算 activity
+- 非当前主线程的通知不算 activity
 
 ### 6. 中断语义
 
@@ -170,11 +193,13 @@ Codex 基础版改为直接启动：
 
 继续复用 `src/codex-minimal/verify.ts` 作为主要验证脚本，但内容改为 app-server 版本。基础版至少覆盖：
 
+- `codex app-server` 的最小协议探针成立
 - `codex app-server` 能完成最小握手
 - 非 Git 目录里首轮消息成功
 - 同一 session 阻止并发 turn
 - `interrupt()` 能中断当前 turn
 - 中断后同一 `threadId` 还能继续下一轮
+- 主线程的 `turn/*` / `item/*` 事件会触发 activity，stderr 与非主线程事件不会触发 activity
 
 人工 smoke test 只验证最小对话链路：
 
@@ -187,10 +212,10 @@ Codex 基础版改为直接启动：
 
 实现策略参考 `C:\work\agent-mgr\multica` 的 Codex backend，重点借鉴以下决策：
 
-- `codex app-server --listen stdio://` + JSON-RPC over stdio
+- `stdio` + JSON-RPC over stdio 的处理方式
 - `initialize` / `initialized` 握手
 - stderr tail
 - `turn/completed` 错误采集
 - `threadId` 过滤，避免子线程通知污染主线程
 
-但不照搬其“一次 Execute 结束即关闭 app-server”的生命周期。当前项目需要的是长期驻留的 chat session，而不是一次执行一进程。
+但不照搬其启动参数和生命周期实现。当前项目第一版仍以直接运行 `codex app-server` 为准，不显式传 `--listen`；同时也不照搬其“一次 Execute 结束即关闭 app-server”的生命周期。当前项目需要的是长期驻留的 chat session，而不是一次执行一进程。
