@@ -4,6 +4,7 @@ const MENU_TTL_MS = 60_000;
 
 export type MenuAction =
   | { type: 'resume_session'; sessionId: string; cwd: string }
+  | { type: 'create_cwd'; cwd: string }
   | { type: 'switch_cwd'; cwd: string }
   | { type: 'switch_provider'; provider: AgentProvider };
 

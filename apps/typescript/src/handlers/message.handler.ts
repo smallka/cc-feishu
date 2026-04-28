@@ -1,5 +1,6 @@
 ﻿import { existsSync, statSync } from 'fs';
 import { isAbsolute, resolve } from 'path';
+import { mkdirSync } from 'fs';
 
 import logger from '../utils/logger';
 import { chatManager } from '../bot/chat-manager';
@@ -17,6 +18,30 @@ const activeProcessors = new Map<string, Promise<void>>();
 let acceptingMessages = true;
 const MESSAGE_IDLE_TIMEOUT_MS = 300000;
 const MESSAGE_TIMEOUT_ACTION: 'notify' | 'kill' = 'notify';
+const RESERVED_WINDOWS_DIR_NAMES = new Set([
+  'CON',
+  'PRN',
+  'AUX',
+  'NUL',
+  'COM1',
+  'COM2',
+  'COM3',
+  'COM4',
+  'COM5',
+  'COM6',
+  'COM7',
+  'COM8',
+  'COM9',
+  'LPT1',
+  'LPT2',
+  'LPT3',
+  'LPT4',
+  'LPT5',
+  'LPT6',
+  'LPT7',
+  'LPT8',
+  'LPT9',
+]);
 
 interface MessageEvent {
   sender: {
@@ -66,6 +91,31 @@ function resolveWorkPath(input: string): string | null {
     return null;
   }
   return target;
+}
+
+function resolveWorkPathCandidate(input: string): string {
+  return isAbsolute(input) ? input : resolve(config.agent.workRoot, input);
+}
+
+function isSingleSegmentRelativePath(input: string): boolean {
+  return !isAbsolute(input)
+    && input !== '.'
+    && input !== '..'
+    && !input.includes('/')
+    && !input.includes('\\');
+}
+
+function isValidWindowsDirectoryName(input: string): boolean {
+  if (!input || /[<>:"/\\|?*\u0000-\u001F]/.test(input)) {
+    return false;
+  }
+
+  if (input.endsWith(' ') || input.endsWith('.')) {
+    return false;
+  }
+
+  const stem = input.split('.')[0]?.toUpperCase() ?? '';
+  return !RESERVED_WINDOWS_DIR_NAMES.has(stem);
 }
 
 function isDirectoryAvailable(target: string): boolean {
@@ -170,6 +220,21 @@ function buildCwdMenu(chatId: string): MenuContext | null {
   };
 }
 
+function buildCreateCwdMenu(input: string, target: string): Omit<MenuContext, 'expiresAt'> {
+  return {
+    kind: 'cwd',
+    title: '创建工作目录？',
+    description: `目录不存在: \`${input}\`\n目标路径: \`${target}\``,
+    items: [
+      {
+        index: 1,
+        label: '创建并切换到该目录',
+        action: { type: 'create_cwd', cwd: target },
+      },
+    ],
+  };
+}
+
 function buildResumeMenu(chatId: string): MenuContext | null {
   const sessions = chatManager.getRecentSessions(chatId, 9);
   if (sessions.length === 0) {
@@ -258,18 +323,30 @@ async function executeMenuAction(chatId: string, action: MenuAction): Promise<vo
     return;
   }
 
+  if (action.type === 'create_cwd') {
+    try {
+      mkdirSync(action.cwd, { recursive: true });
+    } catch (error: any) {
+      await messageService.sendTextMessage(chatId, `创建目录失败: ${action.cwd}\n${error.message}`);
+      return;
+    }
+
+    if (!isDirectoryAvailable(action.cwd)) {
+      await messageService.sendTextMessage(chatId, `创建目录失败: ${action.cwd}`);
+      return;
+    }
+
+    await switchCwd(chatId, action.cwd);
+    return;
+  }
+
   if (action.type === 'switch_cwd') {
     if (!isDirectoryAvailable(action.cwd)) {
       await messageService.sendTextMessage(chatId, getInvalidBindingText(action.cwd));
       return;
     }
 
-    await chatManager.switchCwd(chatId, action.cwd);
-    if (chatManager.supportsSessionResume(chatId)) {
-      await messageService.sendCardMessage(chatId, chatManager.listSessions(chatId));
-    } else {
-      await messageService.sendTextMessage(chatId, `已切换工作目录: ${action.cwd}`);
-    }
+    await switchCwd(chatId, action.cwd);
     return;
   }
 
@@ -278,6 +355,15 @@ async function executeMenuAction(chatId: string, action: MenuAction): Promise<vo
     chatId,
     formatProviderSwitchMessage(action.provider, result, chatManager.supportsSessionResume(chatId)),
   );
+}
+
+async function switchCwd(chatId: string, cwd: string): Promise<void> {
+  await chatManager.switchCwd(chatId, cwd);
+  if (chatManager.supportsSessionResume(chatId)) {
+    await messageService.sendCardMessage(chatId, chatManager.listSessions(chatId));
+  } else {
+    await messageService.sendTextMessage(chatId, `已切换工作目录: ${cwd}`);
+  }
 }
 
 async function handleMenuSelection(chatId: string, text: string): Promise<boolean> {
@@ -729,16 +815,24 @@ async function handleMessageInternal(
     const input = text.slice(4).trim();
     const target = input === '.' ? config.agent.workRoot : resolveWorkPath(input);
     if (!target) {
+      if (isSingleSegmentRelativePath(input)) {
+        if (!isValidWindowsDirectoryName(input)) {
+          await messageService.sendTextMessage(chatId, `目录名不合法: ${input}`);
+          return;
+        }
+
+        const candidate = resolveWorkPathCandidate(input);
+        if (!existsSync(candidate)) {
+          await sendMenu(chatId, buildCreateCwdMenu(input, candidate));
+          return;
+        }
+      }
+
       await messageService.sendTextMessage(chatId, `目录不存在: ${input}`);
       return;
     }
 
-    await chatManager.switchCwd(chatId, target);
-    if (chatManager.supportsSessionResume(chatId)) {
-      await messageService.sendCardMessage(chatId, chatManager.listSessions(chatId));
-    } else {
-      await messageService.sendTextMessage(chatId, `已切换工作目录: ${target}`);
-    }
+    await switchCwd(chatId, target);
     return;
   }
 
