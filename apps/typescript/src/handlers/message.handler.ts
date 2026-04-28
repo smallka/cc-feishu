@@ -3,6 +3,8 @@ import { isAbsolute, resolve } from 'path';
 
 import logger from '../utils/logger';
 import { chatManager } from '../bot/chat-manager';
+import { resolveChatAccess } from '../bot/chat-access';
+import { chatBindingStore } from '../bot/chat-binding-store';
 import menuContext, { renderMenu, type MenuAction, type MenuContext } from '../bot/menu-context';
 import type { DirectorySummary, SessionSummary } from '../agent/session-history';
 import messageService from '../services/message.service';
@@ -74,7 +76,7 @@ function getHelpText(chatId: string): string {
     '/stat - 查看会话状态',
     '/agent - 选择 agent（支持数字选择）',
     '/cd - 列出最近的工作目录（支持数字选择）',
-    '/cd <路径> - 切换工作目录，/cd . 回到根目录',
+    '/cd <路径> - 绑定或修改当前群的工作目录，/cd . 绑定到根目录',
     '/debug - 查看调试信息',
   ];
 
@@ -86,6 +88,14 @@ function getHelpText(chatId: string): string {
   }
 
   return lines.join('\n');
+}
+
+function getUnauthorizedText(): string {
+  return '当前账号无权限使用这个机器人。';
+}
+
+function getUnboundText(): string {
+  return '当前群尚未绑定工作目录，请先使用 /cd <路径> 绑定。';
 }
 
 function formatDuration(seconds: number): string {
@@ -303,6 +313,23 @@ async function prepareMessageTask(data: MessageEvent): Promise<void> {
   }
 
   rememberProcessedMessage(message.message_id);
+
+  const access = resolveChatAccess({
+    text: task.text,
+    senderOpenId: sender.sender_id.open_id,
+    allowedOpenIds: config.feishu.allowedOpenIds,
+    binding: chatBindingStore.get(chatId),
+  });
+
+  if (access.kind === 'unauthorized') {
+    await messageService.sendTextMessage(chatId, getUnauthorizedText());
+    return;
+  }
+
+  if (access.kind === 'unbound') {
+    await messageService.sendTextMessage(chatId, getUnboundText());
+    return;
+  }
 
   if (task.messageType === 'text' && task.text === '/stop') {
     await handleImmediateStop(chatId);

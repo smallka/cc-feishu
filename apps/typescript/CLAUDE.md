@@ -65,19 +65,21 @@ npm run dev
 **ChatManager** (`src/bot/chat-manager.ts`)：
 
 **数据结构**：
-- `chats: Map<chatId, ChatData>` - 存储会话元数据（cwd, sessionId, sessionNotified）
+- `chats: Map<chatId, ChatData>` - 存储运行时会话元数据（cwd, sessionId, sessionNotified）
 - `agents: Map<chatId, Agent>` - 管理 Agent 进程实例
+- `data/chat-bindings.json` - 存储群到工作目录的持久化绑定
 
 **Chat 与 Agent 的关系**：
-- 一个 chat 对应一个 ChatData（持久化元数据）
+- 一个 chat 对应一个运行时 ChatData
 - 一个 chat 同一时间最多一个 Agent（进程实例）
 - Agent 可能不存在（未创建或已销毁），但 ChatData 可以保留
+- 目录绑定由独立的 JSON 文件持久化，不依赖进程内状态
 
 **状态变化**：
-- **首次消息**：创建 Agent，在 defaultCwd 启动新会话
+- **首次消息**：如果群已绑定目录，则在绑定目录启动新会话；否则拒绝普通消息并提示先绑定
 - **后续消息**：复用存活的 Agent，或重启并 resume sessionId
-- **`/cd` 切换目录**：销毁 Agent，清空 sessionId，更新 cwd（下次消息创建新会话）
-- **`/new` 重置**：销毁 Agent，删除 ChatData（下次消息在当前 cwd 创建新会话）
+- **`/cd` 修改绑定目录**：销毁 Agent，清空 sessionId，更新运行时 cwd，并持久化新的群目录绑定
+- **`/new` 重置**：销毁 Agent，保留当前 cwd 和 provider，清空活跃 session（下次消息在当前 cwd 创建新会话）
 - **Agent 进程死亡**：下次消息时自动清理并重启
 
 **Agent** (`src/claude/agent.ts`)：
@@ -102,12 +104,12 @@ npm run dev
 
 **message.handler.ts**：
 - `/help` - 显示命令列表
-- `/new` - 调用 `ChatManager.reset(chatId)`，关闭当前 Agent 并创建新的
+- `/new` - 调用 `ChatManager.reset(chatId)`，关闭当前 Agent 并清空当前 session
 - `/stop` - 调用 `ChatManager.interrupt(chatId)`，向 CLI stdin 写入中断信号
 - `/stat` - 调用 `ChatManager.getSessionInfo(chatId)`，返回当前 session ID 和工作目录
-- `/claude` - 切换到 Claude provider；如果已经是 Claude，则保持不变；无论是否切换都会反馈当前 Claude 模型名
-- `/codex` - 切换到 Codex provider；如果已经是 Codex，则保持不变；无论是否切换都会反馈当前状态
-- `/cd [路径]` - 调用 `ChatManager.switchCwd(chatId, newCwd)`，切换工作目录并 resume session
+- `/agent` - 在 Claude / Codex 间切换 provider
+- `/cd [路径]` - 调用 `ChatManager.switchCwd(chatId, newCwd)`，绑定或修改当前群的工作目录
+- 消息入口会先校验 `sender.sender_id.open_id` 是否在 `FEISHU_ALLOWED_OPEN_IDS` 中
 
 ### 工具权限自动批准
 

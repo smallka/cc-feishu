@@ -1,6 +1,6 @@
-﻿import logger from '../utils/logger';
+import logger from '../utils/logger';
 import messageService from '../services/message.service';
-import { createAgent } from '../agent/factory';
+import { createAgent, type CreateAgentOptions } from '../agent/factory';
 import type { AgentProvider } from '../config';
 import type { ChatAgent, SendMessageOptions } from '../agent/types';
 import type { DirectorySummary, SessionSummary, SessionTarget } from '../agent/session-history';
@@ -17,12 +17,22 @@ import {
   getValidSessions as getCodexValidSessions,
 } from '../codex/session-scanner';
 import config from '../config';
+import { chatBindingStore, type ChatBindingStore } from './chat-binding-store';
 
 interface ChatData {
   cwd: string;
   provider: AgentProvider;
   sessionId: string | undefined;
   sessionNotified?: boolean;
+}
+
+type AgentFactory = (options: CreateAgentOptions) => ChatAgent;
+
+interface ChatManagerOptions {
+  bindingStore?: ChatBindingStore;
+  defaultCwd?: string;
+  defaultProvider?: AgentProvider;
+  agentFactory?: AgentFactory;
 }
 
 function formatDuration(seconds: number): string {
@@ -48,13 +58,17 @@ function formatDuration(seconds: number): string {
 export class ChatManager {
   private chats = new Map<string, ChatData>();
   private agents = new Map<string, ChatAgent>();
+  private readonly bindingStore: ChatBindingStore;
   private readonly defaultCwd: string;
   private readonly defaultProvider: AgentProvider;
+  private readonly agentFactory: AgentFactory;
   private readonly startTime: number;
 
-  constructor() {
-    this.defaultCwd = config.claude.workRoot;
-    this.defaultProvider = config.agent.provider;
+  constructor(options: ChatManagerOptions = {}) {
+    this.bindingStore = options.bindingStore ?? chatBindingStore;
+    this.defaultCwd = options.defaultCwd ?? config.claude.workRoot;
+    this.defaultProvider = options.defaultProvider ?? config.agent.provider;
+    this.agentFactory = options.agentFactory ?? createAgent;
     this.startTime = Date.now();
   }
 
@@ -117,14 +131,16 @@ export class ChatManager {
 
   async switchCwd(chatId: string, newCwd: string): Promise<void> {
     const data = this.chats.get(chatId);
-    const currentCwd = data?.cwd ?? this.defaultCwd;
+    const currentBindingCwd = this.getStoredCwd(chatId);
+    const currentCwd = data?.cwd ?? currentBindingCwd ?? this.defaultCwd;
     const provider = data?.provider ?? this.defaultProvider;
-    if (currentCwd === newCwd) {
+    if (currentCwd === newCwd && currentBindingCwd === newCwd) {
       logger.debug('[ChatManager] Cwd unchanged, skipping switch', { chatId, cwd: newCwd });
       return;
     }
 
     await this.destroyAgent(chatId, 'switching cwd');
+    this.bindingStore.set(chatId, newCwd);
     this.chats.set(chatId, { cwd: newCwd, provider, sessionId: undefined, sessionNotified: false });
     logger.info('[ChatManager] Switched cwd', { chatId, oldCwd: currentCwd, newCwd, provider });
   }
@@ -132,7 +148,7 @@ export class ChatManager {
   async switchProvider(chatId: string, provider: AgentProvider): Promise<{ changed: boolean; cwd: string }> {
     const data = this.chats.get(chatId);
     const currentProvider = data?.provider ?? this.defaultProvider;
-    const cwd = data?.cwd ?? this.defaultCwd;
+    const cwd = data?.cwd ?? this.getStoredCwd(chatId) ?? this.defaultCwd;
 
     if (currentProvider === provider) {
       logger.debug('[ChatManager] Provider unchanged, skipping switch', { chatId, provider });
@@ -158,7 +174,7 @@ export class ChatManager {
   async reset(chatId: string): Promise<string> {
     await this.destroyAgent(chatId, 'reset');
 
-    const cwd = this.chats.get(chatId)?.cwd ?? this.defaultCwd;
+    const cwd = this.getChatCwd(chatId);
     const provider = this.getChatProvider(chatId);
     this.chats.set(chatId, { cwd, provider, sessionId: undefined, sessionNotified: false });
     logger.info('[ChatManager] Session reset', { chatId, cwd, provider });
@@ -171,7 +187,7 @@ export class ChatManager {
     const provider = data?.provider ?? this.defaultProvider;
 
     if (!agent) {
-      const cwd = data?.cwd ?? this.defaultCwd;
+      const cwd = data?.cwd ?? this.getStoredCwd(chatId) ?? this.defaultCwd;
       return `当前没有活跃会话\nProvider: ${provider}\n工作目录: ${cwd}`;
     }
 
@@ -201,7 +217,7 @@ export class ChatManager {
     }
 
     const chatData = this.chats.get(chatId);
-    const cwd = chatData?.cwd ?? this.defaultCwd;
+    const cwd = this.getChatCwd(chatId);
     const sessions = this.getValidSessionsForChat(chatId);
     const totalSessions = this.getSessionCount(chatId);
 
@@ -385,7 +401,7 @@ export class ChatManager {
     }
 
     const data = this.chats.get(chatId);
-    const cwd = data?.cwd ?? this.defaultCwd;
+    const cwd = data?.cwd ?? this.getStoredCwd(chatId) ?? this.defaultCwd;
     const storedSessionId = data?.sessionId;
     const resumeSessionId = this.supportsSessionResume(chatId) && storedSessionId
       ? storedSessionId
@@ -399,7 +415,7 @@ export class ChatManager {
       willResume: !!resumeSessionId,
     });
 
-    agent = createAgent({
+    agent = this.agentFactory({
       provider,
       chatId,
       cwd,
@@ -456,11 +472,15 @@ export class ChatManager {
   }
 
   private getChatCwd(chatId: string): string {
-    return this.chats.get(chatId)?.cwd ?? this.defaultCwd;
+    return this.chats.get(chatId)?.cwd ?? this.getStoredCwd(chatId) ?? this.defaultCwd;
   }
 
   private getChatProvider(chatId: string): AgentProvider {
     return this.chats.get(chatId)?.provider ?? this.defaultProvider;
+  }
+
+  private getStoredCwd(chatId: string): string | null {
+    return this.bindingStore.get(chatId)?.cwd ?? null;
   }
 
   private getValidSessionsForChat(chatId: string, limit = 9): SessionSummary[] {
@@ -475,9 +495,9 @@ export class ChatManager {
   }
 
   private getSessionListForChat(chatId: string): SessionTarget[] {
-      const cwd = this.getChatCwd(chatId);
-      switch (this.getChatProvider(chatId)) {
-        case 'codex':
+    const cwd = this.getChatCwd(chatId);
+    switch (this.getChatProvider(chatId)) {
+      case 'codex':
         return getCodexSessionList(cwd, this.defaultCwd);
       case 'claude':
       default:

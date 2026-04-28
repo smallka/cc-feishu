@@ -1,4 +1,5 @@
-﻿import dotenv from 'dotenv';
+import path from 'node:path';
+import dotenv from 'dotenv';
 
 dotenv.config();
 
@@ -8,6 +9,7 @@ interface Config {
   feishu: {
     appId: string;
     appSecret: string;
+    allowedOpenIds: string[];
   };
   agent: {
     provider: AgentProvider;
@@ -20,6 +22,9 @@ interface Config {
     env: string;
     logLevel: string;
     singleInstancePort: number;
+  };
+  storage: {
+    chatBindingsFile: string;
   };
 }
 
@@ -56,10 +61,18 @@ function parsePort(name: string, fallback: number): number {
   return parsed;
 }
 
+function parseCsvList(rawValue: string | undefined): string[] {
+  return (rawValue || '')
+    .split(',')
+    .map(item => item.trim())
+    .filter(Boolean);
+}
+
 const config: Config = {
   feishu: {
     appId: process.env.FEISHU_APP_ID || '',
     appSecret: process.env.FEISHU_APP_SECRET || '',
+    allowedOpenIds: parseCsvList(process.env.FEISHU_ALLOWED_OPEN_IDS),
   },
   agent: {
     provider: resolveAgentProvider(),
@@ -72,6 +85,9 @@ const config: Config = {
     env: process.env.NODE_ENV || 'development',
     logLevel: process.env.LOG_LEVEL || 'info',
     singleInstancePort: parsePort('SINGLE_INSTANCE_PORT', 8652),
+  },
+  storage: {
+    chatBindingsFile: process.env.CHAT_BINDINGS_FILE || path.resolve(process.cwd(), 'data', 'chat-bindings.json'),
   },
 };
 
