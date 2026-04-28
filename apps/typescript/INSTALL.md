@@ -30,7 +30,7 @@ cp .env.example .env
 FEISHU_APP_ID=cli_xxxxxxxxxx
 FEISHU_APP_SECRET=xxxxxxxxxxxxxx
 AGENT_PROVIDER=claude
-CLAUDE_WORK_ROOT=C:\work
+AGENT_WORK_ROOT=C:\work
 CLAUDE_MODEL=claude-opus-4-6
 SINGLE_INSTANCE_PORT=8652
 NODE_ENV=development
@@ -149,7 +149,7 @@ npm start
 | `FEISHU_APP_ID` | 飞书应用 ID | 必填 |
 | `FEISHU_APP_SECRET` | 飞书应用密钥 | 必填 |
 | `AGENT_PROVIDER` | Agent 类型，可选 `claude` / `codex` | `claude` |
-| `CLAUDE_WORK_ROOT` | 默认工作目录 | 当前进程目录 |
+| `AGENT_WORK_ROOT` | 默认工作目录 | 当前进程目录 |
 | `CLAUDE_MODEL` | Claude 模型名 | `claude-opus-4-6` |
 | `SINGLE_INSTANCE_PORT` | 本地启动锁端口 | `8652` |
 | `NODE_ENV` | 运行环境 | `development` |
@@ -171,6 +171,12 @@ npm start
 
 1. 当前机器上是否已经有一个实例在运行
 2. `SINGLE_INSTANCE_PORT` 是否被其他程序占用
+
+### 配置迁移说明
+
+- `CLAUDE_WORK_ROOT` 已废弃，建议改用 `AGENT_WORK_ROOT`
+- 当前版本仍兼容 `CLAUDE_WORK_ROOT`
+- `CHAT_BINDINGS_FILE` 支持相对文件路径，按进程启动目录解析；使用 PM2 时即按 `ecosystem.config.js` 里的 `cwd` 解析
 
 ### 收不到消息
 
