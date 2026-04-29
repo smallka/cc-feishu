@@ -5,7 +5,7 @@ import {
   ConcurrentTurnError,
   TurnAbortedError,
 } from '../codex-minimal/session';
-import { resolveCodexLaunchConfig } from './launch';
+import { resolveLegacyCodexLaunchOverrides } from './launch';
 
 let agentCounter = 0;
 
@@ -26,7 +26,7 @@ export class CodexAgent implements ChatAgent {
     this.cwd = cwd;
     this.startTime = Date.now();
 
-    const launchConfig = resolveCodexLaunchConfig();
+    const launchConfig = resolveLegacyCodexLaunchOverrides();
     this.session = new CodexMinimalSession({
       workingDirectory: cwd,
       codexPathOverride: launchConfig.executablePath,

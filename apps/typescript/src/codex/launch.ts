@@ -1,12 +1,13 @@
 export interface CodexLaunchConfig {
-  executablePath: string;
-  argsPrefix: string[];
+  executablePath?: string;
+  argsPrefix?: string[];
 }
 
 export function resolveCodexLaunchConfig(): CodexLaunchConfig {
-  if (process.env.CODEX_CMD && process.env.CODEX_CMD.trim()) {
+  const codexCmd = readCodexCommandOverride();
+  if (codexCmd) {
     return {
-      executablePath: process.env.CODEX_CMD,
+      executablePath: codexCmd,
       argsPrefix: [],
     };
   }
@@ -15,4 +16,33 @@ export function resolveCodexLaunchConfig(): CodexLaunchConfig {
     executablePath: 'codex',
     argsPrefix: [],
   };
+}
+
+export function resolveLegacyCodexLaunchOverrides(): CodexLaunchConfig {
+  const codexCmd = readCodexCommandOverride();
+  if (codexCmd) {
+    return {
+      executablePath: codexCmd,
+      argsPrefix: [],
+    };
+  }
+
+  if (process.platform === 'win32') {
+    return {};
+  }
+
+  return {
+    executablePath: 'codex',
+    argsPrefix: [],
+  };
+}
+
+function readCodexCommandOverride(): string | null {
+  const rawCommand = process.env.CODEX_CMD;
+  if (!rawCommand) {
+    return null;
+  }
+
+  const trimmedCommand = rawCommand.trim();
+  return trimmedCommand ? trimmedCommand : null;
 }

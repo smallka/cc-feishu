@@ -26,17 +26,25 @@ type SpawnTarget = {
   launchDescription: string;
 };
 
-const launchConfig = resolveCodexLaunchConfig();
-const spawnTarget = resolveSpawnTarget(launchConfig);
+type ChildExit = {
+  code: number | null;
+  signal: NodeJS.Signals | null;
+};
 
-assert.equal(launchConfig.executablePath, process.env.CODEX_CMD?.trim() || 'codex');
+const launchConfig = resolveCodexLaunchConfig();
+assert.equal(typeof launchConfig.executablePath, 'string', 'app-server executablePath must be set');
 assert.deepEqual(launchConfig.argsPrefix, [], 'argsPrefix must stay empty for codex app-server');
+
+const executablePath = launchConfig.executablePath as string;
+const spawnTarget = resolveSpawnTarget(executablePath);
+
+assert.equal(executablePath, process.env.CODEX_CMD?.trim() || 'codex');
 if (process.platform === 'win32') {
   assert.equal(spawnTarget.command.toLowerCase(), 'cmd.exe');
-  assert.deepEqual(spawnTarget.args.slice(0, 4), ['/d', '/s', '/c', launchConfig.executablePath]);
+  assert.deepEqual(spawnTarget.args.slice(0, 4), ['/d', '/s', '/c', executablePath]);
   assert.equal(spawnTarget.args[4], 'app-server');
 } else {
-  assert.equal(spawnTarget.command, launchConfig.executablePath);
+  assert.equal(spawnTarget.command, executablePath);
   assert.deepEqual(spawnTarget.args, ['app-server']);
 }
 
@@ -50,17 +58,31 @@ const stderrChunks: string[] = [];
 const pendingResponses = new Map<number, PendingResponse>();
 let nextRequestId = 1;
 let threadId: string | null = null;
-let turnCompleted = false;
+let threadModel: string | null = null;
+let threadReasoningEffort: string | null = null;
 let successfulResponseCount = 0;
 let settled = false;
+let shuttingDown = false;
+let childExit: ChildExit | null = null;
+let serverRequestCount = 0;
+let turnCompletedParams: Record<string, unknown> | null = null;
+const terminalErrors: string[] = [];
+const finalAgentMessages: string[] = [];
 
 const rl = readline.createInterface({
   input: child.stdout,
   crlfDelay: Infinity,
 });
 
+const exitPromise = new Promise<ChildExit>((resolve) => {
+  child.once('exit', (code, signal) => {
+    childExit = { code, signal };
+    resolve(childExit);
+  });
+});
+
 const timeout = setTimeout(() => {
-  fail(new Error('smoke test timed out before turn/completed'));
+  void fail(new Error('smoke test timed out before turn/completed'));
 }, 60000);
 
 child.stderr.on('data', (chunk: Buffer) => {
@@ -68,12 +90,12 @@ child.stderr.on('data', (chunk: Buffer) => {
 });
 
 child.on('error', (error) => {
-  fail(error);
+  void fail(error);
 });
 
 child.on('exit', (code, signal) => {
-  if (!settled) {
-    fail(new Error(`codex app-server exited early with code=${code} signal=${signal}`));
+  if (!settled && !shuttingDown) {
+    void fail(new Error(`codex app-server exited early with code=${code} signal=${signal}`));
   }
 });
 
@@ -84,7 +106,7 @@ rl.on('line', (line) => {
   try {
     message = JSON.parse(line) as JsonRpcMessage;
   } catch (error) {
-    fail(new Error(`stdout is not valid JSONL: ${(error as Error).message}\nline=${line}`));
+    void fail(new Error(`stdout is not valid JSONL: ${(error as Error).message}\nline=${line}`));
     return;
   }
 
@@ -115,14 +137,11 @@ rl.on('line', (line) => {
     return;
   }
 
-  if (message.method === 'turn/completed') {
-    turnCompleted = true;
-    finalizeIfReady();
-  }
+  handleNotification(message);
 });
 
 void run().catch((error) => {
-  fail(error as Error);
+  void fail(error as Error);
 });
 
 async function run() {
@@ -146,13 +165,24 @@ async function run() {
 
   threadId = extractThreadId(threadResponse.result);
   assert.ok(threadId, 'thread/start response must include threadId');
+  threadModel = extractThreadModel(threadResponse.result);
+  assert.ok(threadModel, 'thread/start response must include model');
+  threadReasoningEffort = extractThreadReasoningEffort(threadResponse.result);
 
   await request('turn/start', {
     threadId,
+    collaborationMode: {
+      mode: 'plan',
+      settings: {
+        model: threadModel,
+        reasoning_effort: threadReasoningEffort,
+        developer_instructions: null,
+      },
+    },
     input: [
       {
         type: 'text',
-        text: 'Run a read-only command to report the current working directory, then answer in one sentence.',
+        text: 'Before continuing, ask me a single request_user_input question whose only choice is Proceed. After I answer, run a read-only command to report the current working directory, then answer in one sentence.',
       },
     ],
   });
@@ -181,6 +211,7 @@ function notify(method: string, params?: Record<string, unknown>) {
 }
 
 function handleServerRequest(message: JsonRpcMessage) {
+  serverRequestCount += 1;
   const method = message.method ?? 'unknown';
 
   if (method === 'item/commandExecution/requestApproval' || method === 'execCommandApproval') {
@@ -193,8 +224,51 @@ function handleServerRequest(message: JsonRpcMessage) {
     return;
   }
 
+  if (method === 'item/tool/requestUserInput') {
+    respond(message.id!, buildUserInputResponse(message.params));
+    return;
+  }
+
   console.log(`[probe] server request: ${method}`);
   respond(message.id!, {});
+}
+
+function handleNotification(message: JsonRpcMessage) {
+  if (!message.method) {
+    return;
+  }
+
+  if (message.method === 'item/completed') {
+    const agentMessage = extractFinalAgentMessage(message.params);
+    if (agentMessage) {
+      finalAgentMessages.push(agentMessage);
+    }
+
+    const itemError = extractItemError(message.params);
+    if (itemError) {
+      terminalErrors.push(itemError);
+    }
+    return;
+  }
+
+  if (message.method === 'turn/completed') {
+    turnCompletedParams = message.params ?? {};
+    const turnError = extractTurnError(turnCompletedParams);
+    if (turnError) {
+      terminalErrors.push(turnError);
+    }
+    void finalizeIfReady();
+    return;
+  }
+
+  if (message.method === 'error') {
+    terminalErrors.push(JSON.stringify(message.params ?? {}));
+    return;
+  }
+
+  if (message.method === 'turn/failed' || message.method === 'turn/error') {
+    terminalErrors.push(JSON.stringify(message.params ?? {}));
+  }
 }
 
 function respond(id: number, result: Record<string, unknown>) {
@@ -222,26 +296,52 @@ function extractThreadId(result: unknown): string | null {
   return null;
 }
 
-function finalizeIfReady() {
-  if (!threadId || !turnCompleted) {
+function extractThreadModel(result: unknown): string | null {
+  if (!result || typeof result !== 'object') {
+    return null;
+  }
+
+  const model = (result as { model?: unknown }).model;
+  return typeof model === 'string' ? model : null;
+}
+
+function extractThreadReasoningEffort(result: unknown): string | null {
+  if (!result || typeof result !== 'object') {
+    return null;
+  }
+
+  const reasoningEffort = (result as { reasoningEffort?: unknown }).reasoningEffort;
+  return typeof reasoningEffort === 'string' ? reasoningEffort : null;
+}
+
+async function finalizeIfReady() {
+  if (!threadId || !turnCompletedParams) {
     return;
   }
 
-  assert.ok(stdoutLines.length > 0, 'expected stdout JSONL output');
-  assert.ok(successfulResponseCount >= 1, 'expected at least one successful response');
+  try {
+    assert.ok(stdoutLines.length > 0, 'expected stdout JSONL output');
+    assert.ok(successfulResponseCount >= 3, 'expected initialize, thread/start, and turn/start responses');
+    assert.equal(extractTurnStatus(turnCompletedParams), 'completed', 'turn/completed must report a completed turn');
+    assert.equal(extractTurnError(turnCompletedParams), null, 'turn/completed must not include a terminal error');
+    assert.deepEqual(terminalErrors, [], 'expected no terminal errors');
+    assert.ok(serverRequestCount >= 1, 'expected at least one server request');
+    assert.ok(finalAgentMessages.some((message) => message.trim().length > 0), 'expected final agent output');
 
-  settled = true;
-  clearTimeout(timeout);
-  rl.close();
-  child.stdin.end();
-  child.kill();
+    settled = true;
+    clearTimeout(timeout);
+    rl.close();
+    await shutdownChild();
 
-  console.log(`codex app-server launch verified via ${spawnTarget.launchDescription}`);
-  console.log('default stdio transport completed the minimal JSON-RPC handshake');
-  console.log('stdout uses line-delimited JSON');
+    console.log(`codex app-server launch verified via ${spawnTarget.launchDescription}`);
+    console.log('default stdio transport completed the minimal JSON-RPC handshake');
+    console.log(`final agent output: ${finalAgentMessages[finalAgentMessages.length - 1]}`);
+  } catch (error) {
+    await fail(error as Error);
+  }
 }
 
-function fail(error: Error) {
+async function fail(error: Error) {
   if (settled) {
     return;
   }
@@ -249,13 +349,13 @@ function fail(error: Error) {
   settled = true;
   clearTimeout(timeout);
   rl.close();
-  child.stdin.end();
-  child.kill();
 
   for (const pending of pendingResponses.values()) {
     pending.reject(error);
   }
   pendingResponses.clear();
+
+  await shutdownChild();
 
   if (stderrChunks.length > 0) {
     console.error('[stderr]');
@@ -266,22 +366,222 @@ function fail(error: Error) {
     console.error(stdoutLines.slice(-20).join('\n'));
   }
 
-  console.error(error.message);
+  console.error(error.stack || error.message);
   process.exitCode = 1;
 }
 
-function resolveSpawnTarget(config: { executablePath: string }): SpawnTarget {
+function extractTurnStatus(params: Record<string, unknown>): string | null {
+  const directStatus = params.status;
+  if (typeof directStatus === 'string') {
+    return directStatus;
+  }
+
+  const turn = params.turn;
+  if (turn && typeof turn === 'object') {
+    const nestedStatus = (turn as { status?: unknown }).status;
+    if (typeof nestedStatus === 'string') {
+      return nestedStatus;
+    }
+  }
+
+  return null;
+}
+
+function extractTurnError(params: Record<string, unknown>): string | null {
+  const directError = params.error;
+  if (directError && typeof directError === 'object') {
+    const message = (directError as { message?: unknown }).message;
+    if (typeof message === 'string' && message.trim()) {
+      return message.trim();
+    }
+  }
+
+  const turn = params.turn;
+  if (turn && typeof turn === 'object') {
+    const nestedError = (turn as { error?: unknown }).error;
+    if (nestedError && typeof nestedError === 'object') {
+      const message = (nestedError as { message?: unknown }).message;
+      if (typeof message === 'string' && message.trim()) {
+        return message.trim();
+      }
+    }
+  }
+
+  return null;
+}
+
+function extractItemError(params: Record<string, unknown> | undefined): string | null {
+  if (!params) {
+    return null;
+  }
+
+  const item = params.item;
+  if (!item || typeof item !== 'object') {
+    return null;
+  }
+
+  if ((item as { type?: unknown }).type !== 'error') {
+    return null;
+  }
+
+  const message = (item as { message?: unknown }).message;
+  return typeof message === 'string' && message.trim() ? message.trim() : JSON.stringify(item);
+}
+
+function extractFinalAgentMessage(params: Record<string, unknown> | undefined): string | null {
+  if (!params) {
+    return null;
+  }
+
+  const item = params.item;
+  if (!item || typeof item !== 'object') {
+    return null;
+  }
+
+  if ((item as { type?: unknown }).type !== 'agentMessage') {
+    return null;
+  }
+
+  const phase = (item as { phase?: unknown }).phase;
+  if (phase !== 'final_answer') {
+    return null;
+  }
+
+  const text = collectText(item).join(' ').trim();
+  return text || null;
+}
+
+function buildUserInputResponse(params: Record<string, unknown> | undefined): Record<string, unknown> {
+  const questionId = extractUserInputQuestionId(params);
+  assert.ok(questionId, 'request_user_input must provide a question id');
+
+  return {
+    answers: {
+      [questionId]: {
+        answers: ['Proceed'],
+      },
+    },
+  };
+}
+
+function extractUserInputQuestionId(params: Record<string, unknown> | undefined): string | null {
+  if (!params) {
+    return null;
+  }
+
+  const questions = params.questions;
+  if (!Array.isArray(questions) || questions.length === 0) {
+    return null;
+  }
+
+  const firstQuestion = questions[0];
+  if (!firstQuestion || typeof firstQuestion !== 'object') {
+    return null;
+  }
+
+  const questionId = (firstQuestion as { id?: unknown }).id;
+  return typeof questionId === 'string' ? questionId : null;
+}
+
+function collectText(value: unknown): string[] {
+  if (typeof value === 'string') {
+    return [value];
+  }
+
+  if (!value || typeof value !== 'object') {
+    return [];
+  }
+
+  if (Array.isArray(value)) {
+    return value.flatMap((entry) => collectText(entry));
+  }
+
+  const objectValue = value as Record<string, unknown>;
+  const collected: string[] = [];
+
+  for (const [key, entry] of Object.entries(objectValue)) {
+    if (key === 'text' && typeof entry === 'string') {
+      collected.push(entry);
+      continue;
+    }
+
+    if (key === 'content' || key === 'message' || key === 'parts') {
+      collected.push(...collectText(entry));
+    }
+  }
+
+  return collected;
+}
+
+async function shutdownChild() {
+  if (shuttingDown) {
+    await waitForExit(1000);
+    return;
+  }
+
+  shuttingDown = true;
+
+  if (!childExit) {
+    child.stdin.end();
+    if (await waitForExit(3000)) {
+      return;
+    }
+  }
+
+  if (!child.pid || childExit) {
+    return;
+  }
+
+  if (process.platform === 'win32') {
+    await runTaskKill(child.pid);
+    await waitForExit(3000);
+    return;
+  }
+
+  child.kill('SIGTERM');
+  if (await waitForExit(3000)) {
+    return;
+  }
+
+  child.kill('SIGKILL');
+  await waitForExit(3000);
+}
+
+async function waitForExit(timeoutMs: number): Promise<boolean> {
+  if (childExit) {
+    return true;
+  }
+
+  return await Promise.race([
+    exitPromise.then(() => true),
+    new Promise<boolean>((resolve) => {
+      setTimeout(() => resolve(false), timeoutMs);
+    }),
+  ]);
+}
+
+async function runTaskKill(pid: number): Promise<void> {
+  await new Promise<void>((resolve) => {
+    const killer = spawn('taskkill', ['/pid', String(pid), '/t', '/f'], {
+      stdio: 'ignore',
+    });
+    killer.once('error', () => resolve());
+    killer.once('exit', () => resolve());
+  });
+}
+
+function resolveSpawnTarget(executablePath: string): SpawnTarget {
   if (process.platform === 'win32') {
     return {
       command: 'cmd.exe',
-      args: ['/d', '/s', '/c', config.executablePath, 'app-server'],
-      launchDescription: `cmd.exe trampoline (${config.executablePath} app-server)`,
+      args: ['/d', '/s', '/c', executablePath, 'app-server'],
+      launchDescription: `cmd.exe trampoline (${executablePath} app-server)`,
     };
   }
 
   return {
-    command: config.executablePath,
+    command: executablePath,
     args: ['app-server'],
-    launchDescription: `direct spawn (${config.executablePath} app-server)`,
+    launchDescription: `direct spawn (${executablePath} app-server)`,
   };
 }

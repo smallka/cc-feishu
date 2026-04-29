@@ -2,10 +2,11 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import util from 'node:util';
 
 import { getVendoredSdkEntryPath, loadCodexSdk } from './loader';
 import { CodexMinimalSession, ConcurrentTurnError, TurnAbortedError } from './session';
-import { resolveCodexLaunchConfig } from '../codex/launch';
+import { resolveLegacyCodexLaunchOverrides } from '../codex/launch';
 
 interface CheckResult {
   name: string;
@@ -52,11 +53,11 @@ function printCheck(result: CheckResult): void {
 
 async function main(): Promise<void> {
   const checks: CheckResult[] = [];
-  const launchConfig = resolveCodexLaunchConfig();
+  const launchConfig = resolveLegacyCodexLaunchOverrides();
 
   console.log(`[codex-minimal] node=${process.version}`);
   console.log(`[codex-minimal] sdk-entry=${getVendoredSdkEntryPath()}`);
-  console.log(`[codex-minimal] codex-launch=${launchConfig.executablePath} ${launchConfig.argsPrefix.join(' ')}`);
+  console.log(`[codex-minimal] codex-launch=${util.inspect(launchConfig)}`);
 
   const sdk = await loadCodexSdk();
   assert.equal(typeof sdk.Codex, 'function');
