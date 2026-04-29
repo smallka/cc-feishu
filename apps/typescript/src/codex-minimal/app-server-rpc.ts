@@ -199,19 +199,13 @@ export class CodexAppServerRpcClient {
 
   private handleTurnStarted(params: Record<string, unknown>): void {
     const turnStarted = params as AppServerTurnStartedParams;
-    if (typeof turnStarted.turn?.id === 'string' && turnStarted.turn.id.trim()) {
-      this.turnId = turnStarted.turn.id;
-    }
+    this.turnError = null;
+    this.turnId = normalizeString(turnStarted.turn?.id);
   }
 
   private handleTurnCompleted(params: Record<string, unknown>): void {
     const turnCompleted = params as AppServerTurnCompletedParams;
     const turnStatus = normalizeString(turnCompleted.turn?.status) ?? normalizeString(turnCompleted.status);
-    const turnId = normalizeString(turnCompleted.turn?.id);
-
-    if (turnId) {
-      this.turnId = turnId;
-    }
 
     if (turnStatus === 'failed') {
       const errorMessage =
@@ -219,7 +213,11 @@ export class CodexAppServerRpcClient {
         normalizeString(turnCompleted.error?.message) ??
         'codex turn failed';
       this.setTurnError(errorMessage, true);
+    } else {
+      this.turnError = null;
     }
+
+    this.turnId = null;
   }
 
   private handleItemCompleted(params: Record<string, unknown>): void {
@@ -228,7 +226,7 @@ export class CodexAppServerRpcClient {
       return;
     }
 
-    const errorMessage = normalizeString(itemCompleted.item.text);
+    const errorMessage = normalizeString(itemCompleted.item.text) ?? normalizeString(itemCompleted.item.message);
     if (errorMessage) {
       this.setTurnError(errorMessage, false);
     }

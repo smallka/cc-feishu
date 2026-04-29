@@ -406,6 +406,11 @@ function extractItemError(params: Record<string, unknown> | undefined): string |
     return null;
   }
 
+  const text = (item as { text?: unknown }).text;
+  if (typeof text === 'string' && text.trim()) {
+    return text.trim();
+  }
+
   const message = (item as { message?: unknown }).message;
   return typeof message === 'string' && message.trim() ? message.trim() : JSON.stringify(item);
 }

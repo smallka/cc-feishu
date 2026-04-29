@@ -24,6 +24,12 @@ type JsonRpcEnvelope = {
   };
 };
 
+const quietLogger = {
+  info: () => undefined,
+  warn: () => undefined,
+  error: () => undefined,
+};
+
 function createWriter(): FakeWriter {
   return {
     writes: [],
@@ -48,7 +54,7 @@ async function expectRejectsWithMethod(promise: Promise<unknown>, expectedMethod
 async function main() {
   {
     const writer = createWriter();
-    const client = new CodexAppServerRpcClient({ stdin: writer });
+    const client = new CodexAppServerRpcClient({ stdin: writer, logger: quietLogger as any });
     const pending = client.request('initialize', {
       clientInfo: { name: 'rpc-test', version: '1.0.0' },
     });
@@ -59,7 +65,7 @@ async function main() {
 
   {
     const writer = createWriter();
-    const client = new CodexAppServerRpcClient({ stdin: writer });
+    const client = new CodexAppServerRpcClient({ stdin: writer, logger: quietLogger as any });
     const pending = client.request('thread/start', { cwd: 'C:\\work\\cc-feishu' });
 
     client.handleLine('{"jsonrpc":"2.0","id":1,"error":{"code":123,"message":"boom"}}');
@@ -68,7 +74,7 @@ async function main() {
 
   {
     const writer = createWriter();
-    const client = new CodexAppServerRpcClient({ stdin: writer });
+    const client = new CodexAppServerRpcClient({ stdin: writer, logger: quietLogger as any });
     const startThread = client.request('thread/start', { cwd: 'C:\\work\\cc-feishu' });
 
     client.handleLine('{"jsonrpc":"2.0","id":1,"result":{"thread":{"id":"thread-1"}}}');
@@ -81,7 +87,7 @@ async function main() {
 
   {
     const writer = createWriter();
-    const client = new CodexAppServerRpcClient({ stdin: writer });
+    const client = new CodexAppServerRpcClient({ stdin: writer, logger: quietLogger as any });
     const startThread = client.request('thread/start', { cwd: 'C:\\work\\cc-feishu' });
 
     client.handleLine('{"jsonrpc":"2.0","id":1,"result":{"thread":{"id":"thread-1"}}}');
@@ -90,13 +96,53 @@ async function main() {
     client.handleLine('{"jsonrpc":"2.0","method":"error","params":{"threadId":"thread-1","willRetry":true,"error":{"message":"temporary transport issue"}}}');
     assert.equal(client.getTurnError(), null);
 
+    client.handleLine('{"jsonrpc":"2.0","method":"turn/started","params":{"threadId":"thread-1","turn":{"id":"turn-1"}}}');
     client.handleLine('{"jsonrpc":"2.0","method":"turn/completed","params":{"threadId":"thread-1","turn":{"id":"turn-1","status":"failed","error":{"message":"real failure"}}}}');
     assert.equal(client.getTurnError(), 'real failure');
+    assert.equal(client.getTurnId(), null);
   }
 
   {
     const writer = createWriter();
-    const client = new CodexAppServerRpcClient({ stdin: writer });
+    const client = new CodexAppServerRpcClient({ stdin: writer, logger: quietLogger as any });
+    const startThread = client.request('thread/start', { cwd: 'C:\\work\\cc-feishu' });
+
+    client.handleLine('{"jsonrpc":"2.0","id":1,"result":{"thread":{"id":"thread-1"}}}');
+    await startThread;
+
+    client.handleLine('{"jsonrpc":"2.0","method":"turn/started","params":{"threadId":"thread-1","turn":{"id":"turn-1"}}}');
+    client.handleLine('{"jsonrpc":"2.0","method":"turn/completed","params":{"threadId":"thread-1","turn":{"id":"turn-1","status":"failed","error":{"message":"first failure"}}}}');
+    assert.equal(client.getTurnError(), 'first failure');
+    assert.equal(client.getTurnId(), null);
+
+    client.handleLine('{"jsonrpc":"2.0","method":"turn/started","params":{"threadId":"thread-1","turn":{"id":"turn-2"}}}');
+    assert.equal(client.getTurnId(), 'turn-2');
+    assert.equal(client.getTurnError(), null);
+
+    client.handleLine('{"jsonrpc":"2.0","method":"turn/completed","params":{"threadId":"thread-1","turn":{"id":"turn-2","status":"completed"}}}');
+    assert.equal(client.getTurnId(), null);
+    assert.equal(client.getTurnError(), null);
+  }
+
+  {
+    const writer = createWriter();
+    const client = new CodexAppServerRpcClient({ stdin: writer, logger: quietLogger as any });
+    const startThread = client.request('thread/start', { cwd: 'C:\\work\\cc-feishu' });
+
+    client.handleLine('{"jsonrpc":"2.0","id":1,"result":{"thread":{"id":"thread-1"}}}');
+    await startThread;
+
+    client.handleLine('{"jsonrpc":"2.0","method":"item/completed","params":{"threadId":"thread-1","item":{"type":"error","text":"text-shaped item error"}}}');
+    assert.equal(client.getTurnError(), 'text-shaped item error');
+
+    client.handleLine('{"jsonrpc":"2.0","method":"turn/started","params":{"threadId":"thread-1","turn":{"id":"turn-2"}}}');
+    client.handleLine('{"jsonrpc":"2.0","method":"item/completed","params":{"threadId":"thread-1","item":{"type":"error","message":"message-shaped item error"}}}');
+    assert.equal(client.getTurnError(), 'message-shaped item error');
+  }
+
+  {
+    const writer = createWriter();
+    const client = new CodexAppServerRpcClient({ stdin: writer, logger: quietLogger as any });
     const startThread = client.request('thread/start', { cwd: 'C:\\work\\cc-feishu' });
 
     client.handleLine('{"jsonrpc":"2.0","id":1,"result":{"thread":{"id":"thread-1"}}}');
@@ -111,7 +157,7 @@ async function main() {
 
   {
     const writer = createWriter();
-    const client = new CodexAppServerRpcClient({ stdin: writer });
+    const client = new CodexAppServerRpcClient({ stdin: writer, logger: quietLogger as any });
 
     client.handleLine('{"jsonrpc":"2.0","id":41,"method":"item/commandExecution/requestApproval","params":{"command":"dir"}}');
     client.handleLine('{"jsonrpc":"2.0","id":42,"method":"execCommandApproval","params":{"command":"dir"}}');

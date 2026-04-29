@@ -48,6 +48,7 @@ export interface AppServerTurnCompletedParams {
 export interface AppServerItemShape {
   type?: string;
   text?: string;
+  message?: string;
 }
 
 export interface AppServerItemCompletedParams {

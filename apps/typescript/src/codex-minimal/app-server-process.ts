@@ -1,6 +1,6 @@
 import { ChildProcessWithoutNullStreams, spawn } from 'node:child_process';
 import readline from 'node:readline';
-import { resolveCodexAppServerSpawnTarget } from '../codex/launch';
+import { CodexAppServerSpawnTarget, resolveCodexAppServerSpawnTarget } from '../codex/launch';
 import logger from '../utils/logger';
 
 const DEFAULT_STDERR_TAIL_BYTES = 2048;
@@ -9,11 +9,38 @@ const STOP_EXIT_TIMEOUT_MS = 3000;
 type ExitListener = (exit: CodexAppServerProcessExit) => void;
 type LineListener = (line: string) => void;
 type LoggerLike = Pick<typeof logger, 'info' | 'warn' | 'error'>;
+type SpawnFactory = (
+  command: string,
+  args: string[],
+  options: {
+    cwd?: string;
+    env: NodeJS.ProcessEnv;
+    stdio: ['pipe', 'pipe', 'pipe'];
+  },
+) => AppServerProcessHandle;
+
+type ReadableLike = NodeJS.ReadableStream & {
+  on(event: 'data', listener: (chunk: Buffer) => void): unknown;
+};
+
+type AppServerProcessHandle = Pick<
+  ChildProcessWithoutNullStreams,
+  'stdin' | 'stdout' | 'stderr' | 'pid' | 'exitCode' | 'signalCode' | 'kill'
+> & {
+  stdout: NodeJS.ReadableStream;
+  stderr: ReadableLike;
+  on(event: 'error', listener: (error: Error) => void): AppServerProcessHandle;
+  once(event: 'exit', listener: (code: number | null, signal: NodeJS.Signals | null) => void): AppServerProcessHandle;
+  once(event: 'error', listener: (error: Error) => void): AppServerProcessHandle;
+};
 
 export interface CodexAppServerProcessOptions {
   cwd?: string;
   env?: NodeJS.ProcessEnv;
   stderrTailBytes?: number;
+  stopExitTimeoutMs?: number;
+  spawnTarget?: CodexAppServerSpawnTarget;
+  spawnFactory?: SpawnFactory;
   logger?: LoggerLike;
 }
 
@@ -26,12 +53,15 @@ export class CodexAppServerProcess {
   private readonly cwd?: string;
   private readonly env?: NodeJS.ProcessEnv;
   private readonly stderrTailBytes: number;
+  private readonly stopExitTimeoutMs: number;
+  private readonly spawnTarget?: CodexAppServerSpawnTarget;
+  private readonly spawnFactory: SpawnFactory;
   private readonly processLogger: LoggerLike;
   private readonly lineListeners = new Set<LineListener>();
   private readonly exitListeners = new Set<ExitListener>();
   private readonly stderrChunks: Buffer[] = [];
 
-  private child: ChildProcessWithoutNullStreams | null = null;
+  private child: AppServerProcessHandle | null = null;
   private readlineInterface: readline.Interface | null = null;
   private exitPromise: Promise<CodexAppServerProcessExit> | null = null;
   private resolvedExit: CodexAppServerProcessExit | null = null;
@@ -41,6 +71,9 @@ export class CodexAppServerProcess {
     this.cwd = options.cwd;
     this.env = options.env;
     this.stderrTailBytes = options.stderrTailBytes ?? DEFAULT_STDERR_TAIL_BYTES;
+    this.stopExitTimeoutMs = options.stopExitTimeoutMs ?? STOP_EXIT_TIMEOUT_MS;
+    this.spawnTarget = options.spawnTarget;
+    this.spawnFactory = options.spawnFactory ?? defaultSpawnFactory;
     this.processLogger = options.logger ?? logger;
   }
 
@@ -57,8 +90,8 @@ export class CodexAppServerProcess {
       throw new Error('Codex app-server process is already running.');
     }
 
-    const spawnTarget = resolveCodexAppServerSpawnTarget();
-    const child = spawn(spawnTarget.command, spawnTarget.args, {
+    const spawnTarget = this.spawnTarget ?? resolveCodexAppServerSpawnTarget();
+    const child = this.spawnFactory(spawnTarget.command, spawnTarget.args, {
       cwd: this.cwd,
       env: this.env ?? process.env,
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -69,23 +102,41 @@ export class CodexAppServerProcess {
     this.stderrChunks.length = 0;
     this.resolvedExit = null;
     let settleExit: ((exit: CodexAppServerProcessExit) => void) | null = null;
+    let exitFinalized = false;
     this.exitPromise = new Promise<CodexAppServerProcessExit>((resolve) => {
       settleExit = resolve;
       child.once('exit', (code, signal) => {
-        const exit = { code, signal };
-        this.resolvedExit = exit;
-        this.processLogger.info('[CodexAppServerProcess] app-server exited', {
-          code,
-          signal,
+        finalizeExit({ code, signal });
+      });
+    });
+
+    const finalizeExit = (exit: CodexAppServerProcessExit, error?: Error) => {
+      if (exitFinalized) {
+        return;
+      }
+
+      exitFinalized = true;
+      this.resolvedExit = exit;
+      if (error) {
+        this.processLogger.error('[CodexAppServerProcess] app-server process error', {
+          error,
           stopping: this.stopping,
           stderrTail: this.getStderrTail(),
         });
-        for (const listener of this.exitListeners) {
-          listener(exit);
-        }
-        resolve(exit);
-      });
-    });
+      } else {
+        this.processLogger.info('[CodexAppServerProcess] app-server exited', {
+          code: exit.code,
+          signal: exit.signal,
+          stopping: this.stopping,
+          stderrTail: this.getStderrTail(),
+        });
+      }
+      this.cleanupProcessHandles();
+      for (const listener of this.exitListeners) {
+        listener(exit);
+      }
+      settleExit?.(exit);
+    };
 
     this.readlineInterface = readline.createInterface({
       input: child.stdout,
@@ -102,15 +153,7 @@ export class CodexAppServerProcess {
     });
 
     child.on('error', (error) => {
-      this.processLogger.error('[CodexAppServerProcess] app-server process error', { error });
-      if (!this.resolvedExit) {
-        const exit = { code: null, signal: null };
-        this.resolvedExit = exit;
-        for (const listener of this.exitListeners) {
-          listener(exit);
-        }
-        settleExit?.(exit);
-      }
+      finalizeExit({ code: child.exitCode, signal: child.signalCode }, error);
     });
 
     this.processLogger.info('[CodexAppServerProcess] started app-server', {
@@ -135,21 +178,25 @@ export class CodexAppServerProcess {
       return null;
     }
 
-    if (await waitForPromise(exitPromise, STOP_EXIT_TIMEOUT_MS)) {
-      this.cleanupProcessHandles();
+    if (await waitForPromise(exitPromise, this.stopExitTimeoutMs)) {
       return this.resolvedExit;
     }
 
     if (child.exitCode === null && child.signalCode === null) {
       if (process.platform === 'win32') {
         await runTaskKill(child.pid);
+        await exitPromise;
+        return this.resolvedExit;
       } else {
         child.kill('SIGTERM');
+        if (await waitForPromise(exitPromise, this.stopExitTimeoutMs)) {
+          return this.resolvedExit;
+        }
+        child.kill('SIGKILL');
       }
     }
 
     await exitPromise;
-    this.cleanupProcessHandles();
     return this.resolvedExit;
   }
 
@@ -204,6 +251,18 @@ export class CodexAppServerProcess {
       return;
     }
   }
+}
+
+function defaultSpawnFactory(
+  command: string,
+  args: string[],
+  options: {
+    cwd?: string;
+    env: NodeJS.ProcessEnv;
+    stdio: ['pipe', 'pipe', 'pipe'];
+  },
+): AppServerProcessHandle {
+  return spawn(command, args, options);
 }
 
 async function runTaskKill(pid: number | undefined): Promise<void> {
