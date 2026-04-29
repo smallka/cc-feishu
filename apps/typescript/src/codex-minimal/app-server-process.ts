@@ -9,6 +9,7 @@ const STOP_EXIT_TIMEOUT_MS = 3000;
 type ExitListener = (exit: CodexAppServerProcessExit) => void;
 type LineListener = (line: string) => void;
 type LoggerLike = Pick<typeof logger, 'info' | 'warn' | 'error'>;
+type TaskKill = (pid: number | undefined) => Promise<void>;
 type SpawnFactory = (
   command: string,
   args: string[],
@@ -41,6 +42,7 @@ export interface CodexAppServerProcessOptions {
   stopExitTimeoutMs?: number;
   spawnTarget?: CodexAppServerSpawnTarget;
   spawnFactory?: SpawnFactory;
+  taskKill?: TaskKill;
   logger?: LoggerLike;
 }
 
@@ -56,6 +58,7 @@ export class CodexAppServerProcess {
   private readonly stopExitTimeoutMs: number;
   private readonly spawnTarget?: CodexAppServerSpawnTarget;
   private readonly spawnFactory: SpawnFactory;
+  private readonly taskKill: TaskKill;
   private readonly processLogger: LoggerLike;
   private readonly lineListeners = new Set<LineListener>();
   private readonly exitListeners = new Set<ExitListener>();
@@ -74,6 +77,7 @@ export class CodexAppServerProcess {
     this.stopExitTimeoutMs = options.stopExitTimeoutMs ?? STOP_EXIT_TIMEOUT_MS;
     this.spawnTarget = options.spawnTarget;
     this.spawnFactory = options.spawnFactory ?? defaultSpawnFactory;
+    this.taskKill = options.taskKill ?? runTaskKill;
     this.processLogger = options.logger ?? logger;
   }
 
@@ -184,9 +188,22 @@ export class CodexAppServerProcess {
 
     if (child.exitCode === null && child.signalCode === null) {
       if (process.platform === 'win32') {
-        await runTaskKill(child.pid);
-        await exitPromise;
-        return this.resolvedExit;
+        await this.taskKill(child.pid);
+        if (await waitForPromise(exitPromise, this.stopExitTimeoutMs)) {
+          return this.resolvedExit;
+        }
+
+        child.kill('SIGTERM');
+        if (await waitForPromise(exitPromise, this.stopExitTimeoutMs)) {
+          return this.resolvedExit;
+        }
+
+        child.kill('SIGKILL');
+        if (await waitForPromise(exitPromise, this.stopExitTimeoutMs)) {
+          return this.resolvedExit;
+        }
+
+        throw new Error(buildStopTimeoutMessage(child.pid, this.getStderrTail()));
       } else {
         child.kill('SIGTERM');
         if (await waitForPromise(exitPromise, this.stopExitTimeoutMs)) {
@@ -196,8 +213,11 @@ export class CodexAppServerProcess {
       }
     }
 
-    await exitPromise;
-    return this.resolvedExit;
+    if (await waitForPromise(exitPromise, this.stopExitTimeoutMs)) {
+      return this.resolvedExit;
+    }
+
+    throw new Error(buildStopTimeoutMessage(child.pid, this.getStderrTail()));
   }
 
   onExit(listener?: ExitListener): Promise<CodexAppServerProcessExit> {
@@ -286,4 +306,13 @@ async function waitForPromise<T>(promise: Promise<T>, timeoutMs: number): Promis
       setTimeout(() => resolve(false), timeoutMs);
     }),
   ]);
+}
+
+function buildStopTimeoutMessage(pid: number | undefined, stderrTail: string): string {
+  const baseMessage = `Codex app-server process did not exit after stop attempts${pid ? ` (pid=${pid})` : ''}.`;
+  if (!stderrTail) {
+    return baseMessage;
+  }
+
+  return `${baseMessage} stderr tail: ${stderrTail}`;
 }

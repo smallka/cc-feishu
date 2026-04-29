@@ -184,6 +184,34 @@ async function main() {
     assert.deepEqual(child.killSignals, ['SIGTERM', 'SIGKILL']);
     assert.deepEqual(exit, { code: null, signal: 'SIGKILL' });
   });
+
+  await withPlatform('win32', async () => {
+    let taskKillCalls = 0;
+    const child = new FakeChildProcess(401, (signal, currentChild) => {
+      if (signal === 'SIGTERM') {
+        currentChild.finish(null, 'SIGTERM');
+      }
+    });
+    const processInstance = new CodexAppServerProcess({
+      logger: quietLogger as any,
+      stopExitTimeoutMs: 1,
+      spawnFactory: () => child,
+      spawnTarget: {
+        command: 'fake-codex',
+        args: ['app-server'],
+        launchDescription: 'fake spawn',
+      },
+      taskKill: async () => {
+        taskKillCalls += 1;
+      },
+    });
+
+    processInstance.start();
+    const exit = await processInstance.stop();
+    assert.equal(taskKillCalls, 1);
+    assert.deepEqual(child.killSignals, ['SIGTERM']);
+    assert.deepEqual(exit, { code: null, signal: 'SIGTERM' });
+  });
 }
 
 void main().then(
