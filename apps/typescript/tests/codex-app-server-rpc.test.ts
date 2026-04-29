@@ -114,13 +114,17 @@ async function main() {
     const client = new CodexAppServerRpcClient({ stdin: writer });
 
     client.handleLine('{"jsonrpc":"2.0","id":41,"method":"item/commandExecution/requestApproval","params":{"command":"dir"}}');
-    client.handleLine('{"jsonrpc":"2.0","id":42,"method":"item/fileChange/requestApproval","params":{"changes":[]}}');
-    client.handleLine('{"jsonrpc":"2.0","id":43,"method":"server/customRequest","params":{"foo":"bar"}}');
+    client.handleLine('{"jsonrpc":"2.0","id":42,"method":"execCommandApproval","params":{"command":"dir"}}');
+    client.handleLine('{"jsonrpc":"2.0","id":43,"method":"item/fileChange/requestApproval","params":{"changes":[]}}');
+    client.handleLine('{"jsonrpc":"2.0","id":44,"method":"applyPatchApproval","params":{"changes":[]}}');
+    client.handleLine('{"jsonrpc":"2.0","id":45,"method":"server/customRequest","params":{"foo":"bar"}}');
 
     assert.deepEqual(parseWrites(writer), [
       { jsonrpc: '2.0', id: 41, result: { decision: 'accept' } },
       { jsonrpc: '2.0', id: 42, result: { decision: 'accept' } },
-      { jsonrpc: '2.0', id: 43, result: {} },
+      { jsonrpc: '2.0', id: 43, result: { decision: 'accept' } },
+      { jsonrpc: '2.0', id: 44, result: { decision: 'accept' } },
+      { jsonrpc: '2.0', id: 45, result: {} },
     ]);
   }
 

@@ -23,10 +23,6 @@ export interface JsonRpcResponseShape<TResult = unknown> {
   error?: JsonRpcErrorShape;
 }
 
-export interface AppServerThreadShape {
-  id?: string;
-}
-
 export interface AppServerErrorDetail {
   message?: string;
 }
@@ -50,14 +46,8 @@ export interface AppServerTurnCompletedParams {
 }
 
 export interface AppServerItemShape {
-  id?: string;
   type?: string;
-  phase?: string;
   text?: string;
-  message?: unknown;
-  content?: unknown;
-  parts?: unknown;
-  aggregatedOutput?: string;
 }
 
 export interface AppServerItemCompletedParams {
