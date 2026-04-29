@@ -55,15 +55,16 @@ const child = spawn(spawnTarget.command, spawnTarget.args, {
 const stdoutLines: string[] = [];
 const stderrChunks: string[] = [];
 const pendingResponses = new Map<number, PendingResponse>();
+const expectedCwd = process.cwd();
+const commandApprovalMethods = new Set(['item/commandExecution/requestApproval', 'execCommandApproval']);
 let nextRequestId = 1;
 let threadId: string | null = null;
-let threadModel: string | null = null;
-let threadReasoningEffort: string | null = null;
 let successfulResponseCount = 0;
 let settled = false;
 let shuttingDown = false;
 let childExit: ChildExit | null = null;
 let serverRequestCount = 0;
+const serverRequestMethods = new Set<string>();
 let turnCompletedParams: Record<string, unknown> | null = null;
 const terminalErrors: string[] = [];
 const finalAgentMessages: string[] = [];
@@ -157,31 +158,22 @@ async function run() {
   notify('initialized');
 
   const threadResponse = await request('thread/start', {
-    cwd: process.cwd(),
+    cwd: expectedCwd,
     experimentalRawEvents: true,
     persistExtendedHistory: false,
+    approvalPolicy: 'untrusted',
   });
 
   threadId = extractThreadId(threadResponse.result);
   assert.ok(threadId, 'thread/start response must include threadId');
-  threadModel = extractThreadModel(threadResponse.result);
-  assert.ok(threadModel, 'thread/start response must include model');
-  threadReasoningEffort = extractThreadReasoningEffort(threadResponse.result);
 
   await request('turn/start', {
     threadId,
-    collaborationMode: {
-      mode: 'plan',
-      settings: {
-        model: threadModel,
-        reasoning_effort: threadReasoningEffort,
-        developer_instructions: null,
-      },
-    },
+    approvalPolicy: 'untrusted',
     input: [
       {
         type: 'text',
-        text: 'Before continuing, ask me a single request_user_input question whose only choice is Proceed. After I answer, run a read-only command to report the current working directory, then answer in one sentence.',
+        text: `Run the exact read-only command \`node -e "process.stdout.write(process.cwd())"\` to print the current working directory. Do not guess or infer it without running the command. Your final answer must include the exact directory string returned by that command, verbatim: ${expectedCwd}.`,
       },
     ],
   });
@@ -212,19 +204,15 @@ function notify(method: string, params?: Record<string, unknown>) {
 function handleServerRequest(message: JsonRpcMessage) {
   serverRequestCount += 1;
   const method = message.method ?? 'unknown';
+  serverRequestMethods.add(method);
 
-  if (method === 'item/commandExecution/requestApproval' || method === 'execCommandApproval') {
+  if (commandApprovalMethods.has(method)) {
     respond(message.id!, { decision: 'accept' });
     return;
   }
 
   if (method === 'item/fileChange/requestApproval' || method === 'applyPatchApproval') {
     respond(message.id!, { decision: 'accept' });
-    return;
-  }
-
-  if (method === 'item/tool/requestUserInput') {
-    respond(message.id!, buildUserInputResponse(message.params));
     return;
   }
 
@@ -295,24 +283,6 @@ function extractThreadId(result: unknown): string | null {
   return null;
 }
 
-function extractThreadModel(result: unknown): string | null {
-  if (!result || typeof result !== 'object') {
-    return null;
-  }
-
-  const model = (result as { model?: unknown }).model;
-  return typeof model === 'string' ? model : null;
-}
-
-function extractThreadReasoningEffort(result: unknown): string | null {
-  if (!result || typeof result !== 'object') {
-    return null;
-  }
-
-  const reasoningEffort = (result as { reasoningEffort?: unknown }).reasoningEffort;
-  return typeof reasoningEffort === 'string' ? reasoningEffort : null;
-}
-
 async function finalizeIfReady() {
   if (!threadId || !turnCompletedParams) {
     return;
@@ -325,7 +295,15 @@ async function finalizeIfReady() {
     assert.equal(extractTurnError(turnCompletedParams), null, 'turn/completed must not include a terminal error');
     assert.deepEqual(terminalErrors, [], 'expected no terminal errors');
     assert.ok(serverRequestCount >= 1, 'expected at least one server request');
+    assert.ok(
+      [...commandApprovalMethods].some((method) => serverRequestMethods.has(method)),
+      `expected a command approval request, got: ${[...serverRequestMethods].join(', ') || 'none'}`
+    );
     assert.ok(finalAgentMessages.some((message) => message.trim().length > 0), 'expected final agent output');
+    assert.ok(
+      finalAgentMessages.some((message) => message.includes(expectedCwd)),
+      `expected final agent output to include cwd: ${expectedCwd}`
+    );
 
     settled = true;
     clearTimeout(timeout);
@@ -448,38 +426,6 @@ function extractFinalAgentMessage(params: Record<string, unknown> | undefined): 
 
   const text = collectText(item).join(' ').trim();
   return text || null;
-}
-
-function buildUserInputResponse(params: Record<string, unknown> | undefined): Record<string, unknown> {
-  const questionId = extractUserInputQuestionId(params);
-  assert.ok(questionId, 'request_user_input must provide a question id');
-
-  return {
-    answers: {
-      [questionId]: {
-        answers: ['Proceed'],
-      },
-    },
-  };
-}
-
-function extractUserInputQuestionId(params: Record<string, unknown> | undefined): string | null {
-  if (!params) {
-    return null;
-  }
-
-  const questions = params.questions;
-  if (!Array.isArray(questions) || questions.length === 0) {
-    return null;
-  }
-
-  const firstQuestion = questions[0];
-  if (!firstQuestion || typeof firstQuestion !== 'object') {
-    return null;
-  }
-
-  const questionId = (firstQuestion as { id?: unknown }).id;
-  return typeof questionId === 'string' ? questionId : null;
 }
 
 function collectText(value: unknown): string[] {
