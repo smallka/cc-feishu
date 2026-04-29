@@ -33,7 +33,7 @@ assert.equal(launchConfig.executablePath, process.env.CODEX_CMD?.trim() || 'code
 assert.deepEqual(launchConfig.argsPrefix, [], 'argsPrefix must stay empty for codex app-server');
 if (process.platform === 'win32') {
   assert.equal(spawnTarget.command.toLowerCase(), 'cmd.exe');
-  assert.deepEqual(spawnTarget.args.slice(0, 4), ['/d', '/s', '/c', 'codex']);
+  assert.deepEqual(spawnTarget.args.slice(0, 4), ['/d', '/s', '/c', launchConfig.executablePath]);
   assert.equal(spawnTarget.args[4], 'app-server');
 } else {
   assert.equal(spawnTarget.command, launchConfig.executablePath);
