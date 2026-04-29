@@ -416,7 +416,7 @@ function getInvalidStoredBinding(chatId: string): { cwd: string; updatedAt: stri
 }
 
 function isDirectChat(chatType: string | undefined): boolean {
-  return chatType === 'p2p_chat';
+  return chatType === 'p2p' || chatType === 'p2p_chat';
 }
 
 export function handleMessage(data: MessageEvent): Promise<void> {
@@ -462,6 +462,15 @@ async function prepareMessageTask(data: MessageEvent): Promise<void> {
   });
 
   if (access.kind === 'unauthorized') {
+    logger.warn('Rejected message from unauthorized sender', {
+      messageId: message.message_id,
+      chatId,
+      senderOpenId: sender.sender_id.open_id,
+      allowedOpenIds: config.feishu.allowedOpenIds,
+      chatType: message.chat_type,
+      messageType: task.messageType,
+      text: task.text,
+    });
     await messageService.sendTextMessage(chatId, getUnauthorizedText());
     return;
   }

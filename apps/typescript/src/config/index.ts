@@ -1,7 +1,7 @@
 import path from 'node:path';
 import dotenv from 'dotenv';
 
-dotenv.config();
+loadEnvironment();
 
 export type AgentProvider = 'claude' | 'codex';
 
@@ -32,6 +32,26 @@ export const MODEL_MAP: Record<string, string> = {
   opus: 'claude-opus-4-6',
   sonnet: 'claude-sonnet-4-6',
 };
+
+function loadEnvironment(): void {
+  const configuredEnvFile = (process.env.APP_ENV_FILE || '').trim();
+  if (!configuredEnvFile) {
+    dotenv.config();
+    return;
+  }
+
+  const resolvedEnvFile = path.isAbsolute(configuredEnvFile)
+    ? configuredEnvFile
+    : path.resolve(process.cwd(), configuredEnvFile);
+  const result = dotenv.config({
+    path: resolvedEnvFile,
+    override: true,
+  });
+
+  if (result.error) {
+    throw result.error;
+  }
+}
 
 function resolveAgentProvider(): AgentProvider {
   const rawValue = (process.env.AGENT_PROVIDER || 'codex').trim().toLowerCase();

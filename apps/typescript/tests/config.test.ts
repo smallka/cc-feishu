@@ -1,5 +1,5 @@
 import assert from 'assert/strict';
-import { mkdtempSync, rmSync } from 'fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import path from 'path';
 
@@ -76,6 +76,32 @@ async function main(): Promise<void> {
           config.storage.chatBindingsFile,
           path.resolve(sandboxRoot, 'data/chat-bindings.json'),
         );
+      });
+
+      const appEnvFile = path.join(sandboxRoot, '.env.testbot');
+      const defaultEnvFile = path.join(sandboxRoot, '.env');
+      writeFileSync(appEnvFile, [
+        'FEISHU_APP_ID=testbot-app-id',
+        'FEISHU_APP_SECRET=testbot-app-secret',
+        'AGENT_WORK_ROOT=C:\\work\\testbot-root',
+      ].join('\n'), 'utf8');
+      writeFileSync(defaultEnvFile, [
+        'FEISHU_APP_ID=default-app-id',
+        'FEISHU_APP_SECRET=default-app-secret',
+        'AGENT_WORK_ROOT=C:\\work\\default-root',
+      ].join('\n'), 'utf8');
+
+      process.chdir(sandboxRoot);
+      withEnv({
+        APP_ENV_FILE: '.env.testbot',
+        FEISHU_APP_ID: 'shell-app-id',
+        FEISHU_APP_SECRET: 'shell-app-secret',
+        AGENT_WORK_ROOT: 'C:\\work\\shell-root',
+      }, () => {
+        const config = loadConfig();
+        assert.equal(config.feishu.appId, 'testbot-app-id');
+        assert.equal(config.feishu.appSecret, 'testbot-app-secret');
+        assert.equal((config as any).agent.workRoot, 'C:\\work\\testbot-root');
       });
     });
 

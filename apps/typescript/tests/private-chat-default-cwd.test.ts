@@ -55,10 +55,6 @@ async function main(): Promise<void> {
     let privateWarningText = '';
     let groupWarningText = '';
     let persistedBinding = false;
-    let resolvePrivateOutcome: (() => void) | null = null;
-    const privateOutcomeObserved = new Promise<void>((resolve) => {
-      resolvePrivateOutcome = resolve;
-    });
 
     chatBindingStore.get = ((chatId: string) => {
       if (chatId === 'oc_private_default' || chatId === 'oc_group_unbound') {
@@ -76,32 +72,39 @@ async function main(): Promise<void> {
 
     messageService.sendTextMessage = (async (_chatId: string, text: string) => {
       privateWarningText = text;
-      resolvePrivateOutcome?.();
     }) as typeof messageService.sendTextMessage;
     messageService.addReaction = (async () => null) as typeof messageService.addReaction;
     messageService.removeReaction = (async () => {}) as typeof messageService.removeReaction;
 
-    let privateSendArgs: { chatId: string; text: string } | null = null;
+    for (const chatType of ['p2p', 'p2p_chat']) {
+      let resolvePrivateOutcome: (() => void) | null = null;
+      const privateOutcomeObserved = new Promise<void>((resolve) => {
+        resolvePrivateOutcome = resolve;
+      });
+      let privateSendArgs: { chatId: string; text: string } | null = null;
 
-    chatManager.sendMessage = (async (chatId: string, text: string) => {
-      privateSendArgs = { chatId, text };
-      resolvePrivateOutcome?.();
-    }) as typeof chatManager.sendMessage;
+      privateWarningText = '';
+      persistedBinding = false;
+      chatManager.sendMessage = (async (chatId: string, text: string) => {
+        privateSendArgs = { chatId, text };
+        resolvePrivateOutcome?.();
+      }) as typeof chatManager.sendMessage;
 
-    await handleMessage(createTextEvent(
-      'om_private_default',
-      'oc_private_default',
-      'p2p_chat',
-      '继续实现',
-    ) as never);
-    await privateOutcomeObserved;
+      await handleMessage(createTextEvent(
+        `om_private_default_${chatType}`,
+        'oc_private_default',
+        chatType,
+        '继续实现',
+      ) as never);
+      await privateOutcomeObserved;
 
-    assert.deepEqual(privateSendArgs, {
-      chatId: 'oc_private_default',
-      text: '继续实现',
-    });
-    assert.equal(persistedBinding, false, 'private chat fallback should not persist a binding');
-    assert.equal(privateWarningText, '', 'private chat fallback should not emit unbound warnings');
+      assert.deepEqual(privateSendArgs, {
+        chatId: 'oc_private_default',
+        text: '继续实现',
+      });
+      assert.equal(persistedBinding, false, 'private chat fallback should not persist a binding');
+      assert.equal(privateWarningText, '', 'private chat fallback should not emit unbound warnings');
+    }
 
     let groupSendCalled = false;
     let resolveGroupText: (() => void) | null = null;

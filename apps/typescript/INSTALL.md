@@ -89,6 +89,23 @@ npm run build
 npm start
 ```
 
+### Worktree 独立测试实例
+
+如果主干已经在跑一套 bot，而你要在当前 worktree 手动启动另一套测试 bot，推荐使用仓库内置脚本：
+
+```bash
+python .\scripts\start-test-bot.py
+```
+
+说明：
+
+- 脚本会显式指定应用只加载 worktree 根目录下的 `.env.testbot`
+- 一旦使用该脚本，不会再回退读取 `.env`
+- 这份文件默认使用独立的 `SINGLE_INSTANCE_PORT=18652`
+- 群目录绑定会写入独立文件 `data/chat-bindings.test.json`
+- 启动前只需要把 `.env.testbot` 里的测试飞书应用凭据和测试白名单改成真实值
+- 这套方式不会影响主干实例的本地锁和群绑定状态
+
 ### 使用 PM2 托管
 
 推荐在 Windows 常驻运行时使用项目根目录下的 `ecosystem.config.js`：
