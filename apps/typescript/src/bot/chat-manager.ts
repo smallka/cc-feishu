@@ -87,7 +87,7 @@ export class ChatManager {
 
   supportsSessionResume(chatId: string): boolean {
     const provider = this.getChatProvider(chatId);
-    return provider === 'claude' || provider === 'codex';
+    return provider === 'claude';
   }
 
   async sendMessage(chatId: string, text: string, options?: SendMessageOptions): Promise<void> {

@@ -31,7 +31,6 @@ export class CodexAgent implements ChatAgent {
       workingDirectory: cwd,
       codexPathOverride: launchConfig.executablePath,
       codexArgsPrefix: launchConfig.argsPrefix,
-      resumeSessionId,
     });
 
     logger.info('[CodexAgent] Creating agent', {
@@ -41,7 +40,7 @@ export class CodexAgent implements ChatAgent {
       codexPathOverride: launchConfig.executablePath,
       codexArgsPrefix: launchConfig.argsPrefix,
       requestedResumeSessionId: resumeSessionId,
-      resumeSupported: true,
+      resumeSupported: false,
     });
   }
 
@@ -118,13 +117,29 @@ export class CodexAgent implements ChatAgent {
     }
 
     this.destroyed = true;
-    if (this.session.isRunning()) {
+    const hadRunningTurn = this.session.isRunning();
+    if (hadRunningTurn) {
       this.session.interrupt();
+    }
+
+    let closeError: Error | null = null;
+    try {
+      await this.session.destroy();
+    } catch (sessionError) {
+      closeError = sessionError instanceof Error
+        ? sessionError
+        : new Error('Failed to destroy Codex session.');
+      logger.error('[CodexAgent] Failed to close session', {
+        chatId: this.chatId,
+        agentId: this.agentId,
+        error: closeError.message,
+      });
     }
 
     logger.info('[CodexAgent] Destroying agent', {
       chatId: this.chatId,
       agentId: this.agentId,
+      hadRunningTurn,
       hasError: !!error,
       error: error?.message,
     });
@@ -138,6 +153,10 @@ export class CodexAgent implements ChatAgent {
           error: callbackError,
         });
       }
+    }
+
+    if (closeError) {
+      throw closeError;
     }
   }
 
