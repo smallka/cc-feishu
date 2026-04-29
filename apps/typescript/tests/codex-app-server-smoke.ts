@@ -3,6 +3,7 @@ import { spawn } from 'node:child_process';
 import readline from 'node:readline';
 
 const { resolveCodexLaunchConfig } = require('../src/codex/launch') as typeof import('../src/codex/launch');
+const { resolveCodexAppServerSpawnTarget } = require('../src/codex/launch') as typeof import('../src/codex/launch');
 
 type JsonRpcMessage = {
   id?: number;
@@ -20,12 +21,6 @@ type PendingResponse = {
   reject: (error: Error) => void;
 };
 
-type SpawnTarget = {
-  command: string;
-  args: string[];
-  launchDescription: string;
-};
-
 type ChildExit = {
   code: number | null;
   signal: NodeJS.Signals | null;
@@ -35,7 +30,7 @@ const launchConfig = resolveCodexLaunchConfig();
 assert.deepEqual(launchConfig.argsPrefix, [], 'argsPrefix must stay empty for codex app-server');
 
 const executablePath = launchConfig.executablePath;
-const spawnTarget = resolveSpawnTarget(executablePath);
+const spawnTarget = resolveCodexAppServerSpawnTarget();
 
 assert.equal(executablePath, process.env.CODEX_CMD?.trim() || 'codex');
 if (process.platform === 'win32') {
@@ -566,20 +561,4 @@ async function runTaskKill(pid: number): Promise<void> {
     killer.once('error', () => resolve());
     killer.once('exit', () => resolve());
   });
-}
-
-function resolveSpawnTarget(executablePath: string): SpawnTarget {
-  if (process.platform === 'win32') {
-    return {
-      command: 'cmd.exe',
-      args: ['/d', '/s', '/c', executablePath, 'app-server'],
-      launchDescription: `cmd.exe trampoline (${executablePath} app-server)`,
-    };
-  }
-
-  return {
-    command: executablePath,
-    args: ['app-server'],
-    launchDescription: `direct spawn (${executablePath} app-server)`,
-  };
 }

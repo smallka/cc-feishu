@@ -8,6 +8,12 @@ export interface CodexLaunchOverrides {
   argsPrefix?: string[];
 }
 
+export interface CodexAppServerSpawnTarget {
+  command: string;
+  args: string[];
+  launchDescription: string;
+}
+
 export function resolveCodexLaunchConfig(): CodexLaunchConfig {
   const codexCmd = readCodexCommandOverride();
   if (codexCmd) {
@@ -39,6 +45,24 @@ export function resolveLegacyCodexLaunchOverrides(): CodexLaunchOverrides {
   return {
     executablePath: 'codex',
     argsPrefix: [],
+  };
+}
+
+export function resolveCodexAppServerSpawnTarget(): CodexAppServerSpawnTarget {
+  const { executablePath } = resolveCodexLaunchConfig();
+
+  if (process.platform === 'win32') {
+    return {
+      command: 'cmd.exe',
+      args: ['/d', '/s', '/c', executablePath, 'app-server'],
+      launchDescription: `cmd.exe trampoline (${executablePath} app-server)`,
+    };
+  }
+
+  return {
+    command: executablePath,
+    args: ['app-server'],
+    launchDescription: `direct spawn (${executablePath} app-server)`,
   };
 }
 
