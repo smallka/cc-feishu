@@ -56,6 +56,7 @@ const stdoutLines: string[] = [];
 const stderrChunks: string[] = [];
 const pendingResponses = new Map<number, PendingResponse>();
 const expectedCwd = process.cwd();
+const expectedCommand = 'node -e "process.stdout.write(process.cwd())"';
 const commandApprovalMethods = new Set(['item/commandExecution/requestApproval', 'execCommandApproval']);
 let nextRequestId = 1;
 let threadId: string | null = null;
@@ -65,6 +66,7 @@ let shuttingDown = false;
 let childExit: ChildExit | null = null;
 let serverRequestCount = 0;
 const serverRequestMethods = new Set<string>();
+const approvedCommands: string[] = [];
 let turnCompletedParams: Record<string, unknown> | null = null;
 const terminalErrors: string[] = [];
 const finalAgentMessages: string[] = [];
@@ -173,7 +175,7 @@ async function run() {
     input: [
       {
         type: 'text',
-        text: `Run the exact read-only command \`node -e "process.stdout.write(process.cwd())"\` to print the current working directory. Do not guess or infer it without running the command. Your final answer must include the exact directory string returned by that command, verbatim: ${expectedCwd}.`,
+        text: `Run the exact read-only command \`${expectedCommand}\` to print the current working directory. Do not guess or infer it without running the command. Your final answer must include the exact directory string returned by that command, verbatim: ${expectedCwd}.`,
       },
     ],
   });
@@ -207,6 +209,10 @@ function handleServerRequest(message: JsonRpcMessage) {
   serverRequestMethods.add(method);
 
   if (commandApprovalMethods.has(method)) {
+    const approvedCommand = extractApprovedCommand(message.params);
+    if (approvedCommand) {
+      approvedCommands.push(approvedCommand);
+    }
     respond(message.id!, { decision: 'accept' });
     return;
   }
@@ -298,6 +304,10 @@ async function finalizeIfReady() {
     assert.ok(
       [...commandApprovalMethods].some((method) => serverRequestMethods.has(method)),
       `expected a command approval request, got: ${[...serverRequestMethods].join(', ') || 'none'}`
+    );
+    assert.ok(
+      approvedCommands.some((command) => isExpectedApprovedCommand(command)),
+      `expected approved cwd command, got: ${approvedCommands.join(' | ') || 'none'}`
     );
     assert.ok(finalAgentMessages.some((message) => message.trim().length > 0), 'expected final agent output');
     assert.ok(
@@ -426,6 +436,49 @@ function extractFinalAgentMessage(params: Record<string, unknown> | undefined): 
 
   const text = collectText(item).join(' ').trim();
   return text || null;
+}
+
+function isExpectedApprovedCommand(command: string): boolean {
+  return command === expectedCommand || (
+    command.includes('node -e') &&
+    command.includes('process.stdout.write(process.cwd())')
+  );
+}
+
+function extractApprovedCommand(params: Record<string, unknown> | undefined): string | null {
+  if (!params) {
+    return null;
+  }
+
+  const directCommand = normalizeApprovedCommand(params.command);
+  if (directCommand) {
+    return directCommand;
+  }
+
+  const item = params.item;
+  if (item && typeof item === 'object') {
+    const nestedCommand = normalizeApprovedCommand((item as { command?: unknown }).command);
+    if (nestedCommand) {
+      return nestedCommand;
+    }
+  }
+
+  return null;
+}
+
+function normalizeApprovedCommand(command: unknown): string | null {
+  if (typeof command === 'string') {
+    return command.trim() || null;
+  }
+
+  if (Array.isArray(command)) {
+    const commandParts = command.filter((part): part is string => typeof part === 'string' && part.length > 0);
+    if (commandParts.length > 0) {
+      return commandParts.join(' ');
+    }
+  }
+
+  return null;
 }
 
 function collectText(value: unknown): string[] {

@@ -47,6 +47,13 @@ try {
   assert.equal(legacyWindowsConfig.executablePath, undefined);
   assert.equal(legacyWindowsConfig.argsPrefix, undefined);
 
+  process.env.CODEX_CMD = '';
+  const legacyNonWindowsConfig = withPlatform('linux', () =>
+    loadLaunchModule().resolveLegacyCodexLaunchOverrides()
+  );
+  assert.equal(legacyNonWindowsConfig.executablePath, 'codex');
+  assert.deepEqual(legacyNonWindowsConfig.argsPrefix, []);
+
   process.env.CODEX_CMD = '  C:\\tools\\codex.cmd  ';
   const legacyOverrideConfig = withPlatform('win32', () =>
     loadLaunchModule().resolveLegacyCodexLaunchOverrides()
