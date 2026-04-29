@@ -1,7 +1,5 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import os from 'node:os';
-import path from 'node:path';
 import readline from 'node:readline';
 
 const { resolveCodexLaunchConfig } = require('../src/codex/launch') as typeof import('../src/codex/launch');
@@ -22,15 +20,29 @@ type PendingResponse = {
   reject: (error: Error) => void;
 };
 
+type SpawnTarget = {
+  command: string;
+  args: string[];
+  launchDescription: string;
+};
+
 const launchConfig = resolveCodexLaunchConfig();
+const spawnTarget = resolveSpawnTarget(launchConfig);
 
 assert.equal(launchConfig.executablePath, process.env.CODEX_CMD?.trim() || 'codex');
 assert.deepEqual(launchConfig.argsPrefix, [], 'argsPrefix must stay empty for codex app-server');
+if (process.platform === 'win32') {
+  assert.equal(spawnTarget.command.toLowerCase(), 'cmd.exe');
+  assert.deepEqual(spawnTarget.args.slice(0, 4), ['/d', '/s', '/c', 'codex']);
+  assert.equal(spawnTarget.args[4], 'app-server');
+} else {
+  assert.equal(spawnTarget.command, launchConfig.executablePath);
+  assert.deepEqual(spawnTarget.args, ['app-server']);
+}
 
-const child = spawn(launchConfig.executablePath, ['app-server'], {
+const child = spawn(spawnTarget.command, spawnTarget.args, {
   stdio: ['pipe', 'pipe', 'pipe'],
-  env: buildSpawnEnv(),
-  shell: process.platform === 'win32',
+  env: process.env,
 });
 
 const stdoutLines: string[] = [];
@@ -224,9 +236,9 @@ function finalizeIfReady() {
   child.stdin.end();
   child.kill();
 
-  console.log('codex app-server 可直接通过 `codex app-server` 启动');
-  console.log('默认 transport 可通过 stdio 完成最小握手');
-  console.log('stdout 为逐行 JSON');
+  console.log(`codex app-server launch verified via ${spawnTarget.launchDescription}`);
+  console.log('default stdio transport completed the minimal JSON-RPC handshake');
+  console.log('stdout uses line-delimited JSON');
 }
 
 function fail(error: Error) {
@@ -258,20 +270,18 @@ function fail(error: Error) {
   process.exitCode = 1;
 }
 
-function buildSpawnEnv(): NodeJS.ProcessEnv {
-  const env = { ...process.env };
-  if (process.platform !== 'win32') {
-    return env;
+function resolveSpawnTarget(config: { executablePath: string }): SpawnTarget {
+  if (process.platform === 'win32') {
+    return {
+      command: 'cmd.exe',
+      args: ['/d', '/s', '/c', config.executablePath, 'app-server'],
+      launchDescription: `cmd.exe trampoline (${config.executablePath} app-server)`,
+    };
   }
 
-  const appData = env.APPDATA ?? path.join(os.homedir(), 'AppData', 'Roaming');
-  const npmBin = path.join(appData, 'npm');
-  const currentPath = env.PATH ?? '';
-  const pathEntries = currentPath.split(path.delimiter).filter(Boolean);
-
-  if (!pathEntries.includes(npmBin)) {
-    env.PATH = [npmBin, currentPath].filter(Boolean).join(path.delimiter);
-  }
-
-  return env;
+  return {
+    command: config.executablePath,
+    args: ['app-server'],
+    launchDescription: `direct spawn (${config.executablePath} app-server)`,
+  };
 }
