@@ -28,6 +28,10 @@ const originalCodexCmd = process.env.CODEX_CMD;
 try {
   process.env.CODEX_CMD = '';
   const defaultConfig = loadLaunchModule().resolveCodexLaunchConfig();
+  const defaultExecutablePath: string = defaultConfig.executablePath;
+  const defaultArgsPrefix: string[] = defaultConfig.argsPrefix;
+  assert.equal(defaultExecutablePath, 'codex');
+  assert.deepEqual(defaultArgsPrefix, []);
   assert.equal(defaultConfig.executablePath, 'codex');
   assert.deepEqual(defaultConfig.argsPrefix, []);
 

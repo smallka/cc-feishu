@@ -32,10 +32,9 @@ type ChildExit = {
 };
 
 const launchConfig = resolveCodexLaunchConfig();
-assert.equal(typeof launchConfig.executablePath, 'string', 'app-server executablePath must be set');
 assert.deepEqual(launchConfig.argsPrefix, [], 'argsPrefix must stay empty for codex app-server');
 
-const executablePath = launchConfig.executablePath as string;
+const executablePath = launchConfig.executablePath;
 const spawnTarget = resolveSpawnTarget(executablePath);
 
 assert.equal(executablePath, process.env.CODEX_CMD?.trim() || 'codex');

@@ -1,4 +1,9 @@
 export interface CodexLaunchConfig {
+  executablePath: string;
+  argsPrefix: string[];
+}
+
+export interface CodexLaunchOverrides {
   executablePath?: string;
   argsPrefix?: string[];
 }
@@ -18,7 +23,7 @@ export function resolveCodexLaunchConfig(): CodexLaunchConfig {
   };
 }
 
-export function resolveLegacyCodexLaunchOverrides(): CodexLaunchConfig {
+export function resolveLegacyCodexLaunchOverrides(): CodexLaunchOverrides {
   const codexCmd = readCodexCommandOverride();
   if (codexCmd) {
     return {
