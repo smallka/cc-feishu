@@ -100,7 +100,7 @@ export class CodexMinimalSession {
       messageText: text,
       imageCount: options?.imagePaths?.length ?? 0,
       requestedResumeSessionId: this.resumeSessionId,
-      resumeSupported: false,
+      resumeSupported: true,
     });
 
     const runPromise = this.runTurn(text, options);
@@ -308,12 +308,6 @@ export class CodexMinimalSession {
   }
 
   private async startOnce(attempt: number): Promise<void> {
-    if (this.resumeSessionId) {
-      logger.warn('[CodexMinimalSession] resumeSessionId is currently ignored for app-server sessions', {
-        requestedResumeSessionId: this.resumeSessionId,
-      });
-    }
-
     this.state = 'starting';
     const appServerProcess = new CodexAppServerProcess({
       cwd: this.workingDirectory,
@@ -355,19 +349,29 @@ export class CodexMinimalSession {
 
     rpcClient.notify('initialized');
 
-    await rpcClient.request('thread/start', {
-      cwd: this.workingDirectory,
-      approvalPolicy: 'never',
-      experimentalRawEvents: true,
-      persistExtendedHistory: false,
-      sandboxMode: 'danger-full-access',
-      skipGitRepoCheck: true,
-      networkAccessEnabled: true,
-    });
+    if (this.resumeSessionId) {
+      await rpcClient.request('thread/resume', {
+        threadId: this.resumeSessionId,
+        cwd: this.workingDirectory,
+        approvalPolicy: 'never',
+        persistExtendedHistory: false,
+        sandbox: 'danger-full-access',
+      });
+    } else {
+      await rpcClient.request('thread/start', {
+        cwd: this.workingDirectory,
+        approvalPolicy: 'never',
+        experimentalRawEvents: true,
+        persistExtendedHistory: false,
+        sandboxMode: 'danger-full-access',
+        skipGitRepoCheck: true,
+        networkAccessEnabled: true,
+      });
+    }
 
     const threadId = rpcClient.getThreadId();
     if (!threadId) {
-      throw new Error('thread/start did not return a threadId.');
+      throw new Error('Codex thread initialization did not return a threadId.');
     }
 
     this.threadId = threadId;
@@ -377,6 +381,8 @@ export class CodexMinimalSession {
       workingDirectory: this.workingDirectory,
       threadId: this.threadId,
       attempt,
+      resumed: !!this.resumeSessionId,
+      requestedResumeSessionId: this.resumeSessionId,
     });
   }
 

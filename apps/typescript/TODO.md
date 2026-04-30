@@ -7,5 +7,4 @@
 - Finalize and keep the expanded AI input/output logging for Feishu entry, ChatManager, ClaudeAgent, and CodexAgent.
 - Commit the Step 3 provider-selection changes after final verification.
 - Add project-level Codex configuration for model/provider/base URL instead of relying only on `~/.codex/config.toml`.
-- Design and implement session resume/history support for the Codex provider.
 - Add a real end-to-end validation pass for `AGENT_PROVIDER=codex` over the Feishu WebSocket flow.
