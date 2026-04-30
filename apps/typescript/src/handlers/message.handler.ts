@@ -149,8 +149,8 @@ function getHelpText(chatId: string): string {
   return lines.join('\n');
 }
 
-function getUnauthorizedText(): string {
-  return '当前账号无权限使用这个机器人。';
+function getUnauthorizedText(openId: string): string {
+  return `当前账号无权限使用这个机器人。\n你的 open_id: ${openId}\n如需授权，请将它加入 FEISHU_ALLOWED_OPEN_IDS。`;
 }
 
 function getUnboundText(): string {
@@ -462,7 +462,7 @@ async function prepareMessageTask(data: MessageEvent): Promise<void> {
   });
 
   if (access.kind === 'unauthorized') {
-    await messageService.sendTextMessage(chatId, getUnauthorizedText());
+    await messageService.sendTextMessage(chatId, getUnauthorizedText(sender.sender_id.open_id));
     return;
   }
 

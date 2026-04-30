@@ -69,14 +69,7 @@ function parseCsvList(rawValue: string | undefined): string[] {
 }
 
 function parseAllowedOpenIds(): string[] {
-  const allowedOpenIds = parseCsvList(process.env.FEISHU_ALLOWED_OPEN_IDS);
-  const ownerOpenId = (process.env.FEISHU_OWNER_OPEN_ID || '').trim();
-
-  if (!ownerOpenId) {
-    return allowedOpenIds;
-  }
-
-  return Array.from(new Set([...allowedOpenIds, ownerOpenId]));
+  return parseCsvList(process.env.FEISHU_ALLOWED_OPEN_IDS);
 }
 
 function resolveAgentWorkRoot(): string {
