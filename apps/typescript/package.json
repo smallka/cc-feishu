@@ -10,6 +10,8 @@
     "verify:codex-minimal": "npm run build && node dist/codex-minimal/verify.js",
     "test:chat-binding": "ts-node tests/chat-binding.test.ts",
     "test:codex-app-server-smoke": "ts-node tests/codex-app-server-smoke.ts",
+    "test:group-chat-auto-bind": "ts-node tests/group-chat-auto-bind.test.ts",
+    "test:private-chat-default-cwd": "ts-node tests/private-chat-default-cwd.test.ts",
     "test:stdio": "ts-node tests/stdio-protocol.test.ts",
     "test:multi-turn": "ts-node tests/multi-turn.test.ts",
     "test:tool-use": "ts-node tests/tool-use.test.ts",

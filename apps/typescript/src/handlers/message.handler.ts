@@ -6,8 +6,14 @@ import logger from '../utils/logger';
 import { chatManager } from '../bot/chat-manager';
 import { resolveChatAccess } from '../bot/chat-access';
 import { chatBindingStore } from '../bot/chat-binding-store';
+import {
+  deriveChatDirectoryName,
+  isSingleSegmentRelativePath,
+  isValidWindowsDirectoryName,
+} from '../bot/directory-name';
 import menuContext, { renderMenu, type MenuAction, type MenuContext } from '../bot/menu-context';
 import type { DirectorySummary, SessionSummary, SessionTarget } from '../agent/session-history';
+import chatService from '../services/chat.service';
 import messageService from '../services/message.service';
 import config, { type AgentProvider } from '../config';
 
@@ -18,30 +24,6 @@ const activeProcessors = new Map<string, Promise<void>>();
 let acceptingMessages = true;
 const MESSAGE_IDLE_TIMEOUT_MS = 300000;
 const MESSAGE_TIMEOUT_ACTION: 'notify' | 'kill' = 'notify';
-const RESERVED_WINDOWS_DIR_NAMES = new Set([
-  'CON',
-  'PRN',
-  'AUX',
-  'NUL',
-  'COM1',
-  'COM2',
-  'COM3',
-  'COM4',
-  'COM5',
-  'COM6',
-  'COM7',
-  'COM8',
-  'COM9',
-  'LPT1',
-  'LPT2',
-  'LPT3',
-  'LPT4',
-  'LPT5',
-  'LPT6',
-  'LPT7',
-  'LPT8',
-  'LPT9',
-]);
 
 interface MessageEvent {
   sender: {
@@ -97,27 +79,6 @@ function resolveWorkPathCandidate(input: string): string {
   return isAbsolute(input) ? input : resolve(config.agent.workRoot, input);
 }
 
-function isSingleSegmentRelativePath(input: string): boolean {
-  return !isAbsolute(input)
-    && input !== '.'
-    && input !== '..'
-    && !input.includes('/')
-    && !input.includes('\\');
-}
-
-function isValidWindowsDirectoryName(input: string): boolean {
-  if (!input || /[<>:"/\\|?*\u0000-\u001F]/.test(input)) {
-    return false;
-  }
-
-  if (input.endsWith(' ') || input.endsWith('.')) {
-    return false;
-  }
-
-  const stem = input.split('.')[0]?.toUpperCase() ?? '';
-  return !RESERVED_WINDOWS_DIR_NAMES.has(stem);
-}
-
 function isDirectoryAvailable(target: string): boolean {
   try {
     return existsSync(target) && statSync(target).isDirectory();
@@ -149,8 +110,8 @@ function getHelpText(chatId: string): string {
   return lines.join('\n');
 }
 
-function getUnauthorizedText(): string {
-  return '当前账号无权限使用这个机器人。';
+function getUnauthorizedText(openId: string): string {
+  return `当前账号无权限使用这个机器人。\n你的 open_id: ${openId}\n如需授权，请将它加入 FEISHU_ALLOWED_OPEN_IDS。`;
 }
 
 function getUnboundText(): string {
@@ -419,6 +380,93 @@ function isDirectChat(chatType: string | undefined): boolean {
   return chatType === 'p2p' || chatType === 'p2p_chat';
 }
 
+function buildAutoBindMessage(
+  chatName: string,
+  target: string,
+  directoryName: string,
+  options: { created: boolean; sanitized: boolean; existed: boolean },
+): string {
+  const lines = [
+    options.created
+      ? '已根据群名自动创建并绑定工作目录。'
+      : '已根据群名自动绑定到现有工作目录。',
+    `群名: ${chatName}`,
+    `工作目录: ${target}`,
+  ];
+
+  if (options.existed) {
+    lines.push(`检测到同名目录已存在，已直接绑定: ${directoryName}`);
+  } else {
+    lines.push(`已创建目录: ${directoryName}`);
+  }
+
+  if (options.sanitized) {
+    lines.push(`群名已按 Windows 目录规则规范化为: ${directoryName}`);
+  }
+
+  return lines.join('\n');
+}
+
+async function autoBindGroupDirectory(chatId: string): Promise<{ bound: boolean; notified: boolean }> {
+  const chatName = await chatService.getChatName(chatId);
+  if (!chatName) {
+    await messageService.sendTextMessage(
+      chatId,
+      '当前群尚未绑定工作目录，且读取群名失败，请使用 /cd <路径> 绑定。',
+    );
+    return { bound: false, notified: true };
+  }
+
+  const derived = deriveChatDirectoryName(chatName);
+  if (!derived.autoBindable || !derived.directoryName) {
+    await messageService.sendTextMessage(
+      chatId,
+      [
+        '当前群尚未绑定工作目录。',
+        `群名: ${chatName}`,
+        '该群名在按 Windows 目录规则规范化后仍不可用，请使用 /cd <路径> 手动绑定。',
+      ].join('\n'),
+    );
+    return { bound: false, notified: true };
+  }
+
+  const target = resolveWorkPathCandidate(derived.directoryName);
+  const targetExists = existsSync(target);
+
+  if (targetExists && !isDirectoryAvailable(target)) {
+    await messageService.sendTextMessage(
+      chatId,
+      `群名对应路径已存在但不是目录: ${target}\n请使用 /cd <路径> 手动绑定。`,
+    );
+    return { bound: false, notified: true };
+  }
+
+  if (!targetExists) {
+    try {
+      mkdirSync(target, { recursive: true });
+    } catch (error: any) {
+      await messageService.sendTextMessage(chatId, `自动创建目录失败: ${target}\n${error.message}`);
+      return { bound: false, notified: true };
+    }
+
+    if (!isDirectoryAvailable(target)) {
+      await messageService.sendTextMessage(chatId, `自动创建目录失败: ${target}`);
+      return { bound: false, notified: true };
+    }
+  }
+
+  await chatManager.switchCwd(chatId, target);
+  await messageService.sendTextMessage(
+    chatId,
+    buildAutoBindMessage(chatName, target, derived.directoryName, {
+      created: !targetExists,
+      sanitized: derived.sanitized,
+      existed: targetExists,
+    }),
+  );
+  return { bound: true, notified: true };
+}
+
 export function handleMessage(data: MessageEvent): Promise<void> {
   return prepareMessageTask(data);
 }
@@ -447,11 +495,11 @@ async function prepareMessageTask(data: MessageEvent): Promise<void> {
 
   rememberProcessedMessage(message.message_id);
 
-  const binding = chatBindingStore.get(chatId);
-  const bindingValid = !binding || isDirectoryAvailable(binding.cwd);
+  let binding = chatBindingStore.get(chatId);
+  let bindingValid = !binding || isDirectoryAvailable(binding.cwd);
   const hasActiveMenuSelection = /^\d$/.test(task.text) && menuContext.get(chatId) !== null;
 
-  const access = resolveChatAccess({
+  let access = resolveChatAccess({
     text: task.text,
     senderOpenId: sender.sender_id.open_id,
     allowedOpenIds: config.feishu.allowedOpenIds,
@@ -471,13 +519,30 @@ async function prepareMessageTask(data: MessageEvent): Promise<void> {
       messageType: task.messageType,
       text: task.text,
     });
-    await messageService.sendTextMessage(chatId, getUnauthorizedText());
+    await messageService.sendTextMessage(chatId, getUnauthorizedText(sender.sender_id.open_id));
     return;
   }
 
   if (access.kind === 'unbound') {
-    await messageService.sendTextMessage(chatId, getUnboundText());
-    return;
+    const autoBindResult = await autoBindGroupDirectory(chatId);
+    if (!autoBindResult.bound) {
+      if (!autoBindResult.notified) {
+        await messageService.sendTextMessage(chatId, getUnboundText());
+      }
+      return;
+    }
+
+    binding = chatBindingStore.get(chatId);
+    bindingValid = !binding || isDirectoryAvailable(binding.cwd);
+    access = resolveChatAccess({
+      text: task.text,
+      senderOpenId: sender.sender_id.open_id,
+      allowedOpenIds: config.feishu.allowedOpenIds,
+      binding,
+      isDirectChat: isDirectChat(message.chat_type),
+      bindingValid,
+      hasActiveMenuSelection,
+    });
   }
 
   if (access.kind === 'invalid_binding') {

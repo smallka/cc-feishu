@@ -5,6 +5,7 @@ import feishuClient from '../bot/client';
 import logger from '../utils/logger';
 
 const FEISHU_MEDIA_DIR = path.resolve(process.cwd(), 'tmp', 'feishu-media');
+const INLINE_CODE_WRAPPED_URL_RE = /(^|[^`])`(https?:\/\/[^\s`]+)`(?=($|[^\w/=&?#%.-]))/g;
 
 class MessageService {
   async addReaction(messageId: string, emojiType: string): Promise<string | null> {
@@ -57,6 +58,7 @@ class MessageService {
   async sendCardMessage(chatId: string, markdown: string): Promise<void> {
     try {
       const client = feishuClient.getClient();
+      const normalizedMarkdown = normalizeFeishuMarkdown(markdown);
 
       await client.im.message.create({
         params: {
@@ -72,7 +74,7 @@ class MessageService {
             elements: [
               {
                 tag: 'markdown',
-                content: markdown,
+                content: normalizedMarkdown,
               },
             ],
           }),
@@ -81,8 +83,8 @@ class MessageService {
 
       logger.info('Card message sent', {
         chatId,
-        contentLength: markdown.length,
-        markdown,
+        contentLength: normalizedMarkdown.length,
+        markdown: normalizedMarkdown,
       });
     } catch (error) {
       logger.error('Failed to send card message', { error, chatId });
@@ -136,6 +138,12 @@ class MessageService {
       },
     });
   }
+}
+
+export function normalizeFeishuMarkdown(markdown: string): string {
+  return markdown.replace(INLINE_CODE_WRAPPED_URL_RE, (_match, prefix: string, url: string) => {
+    return `${prefix}[${url}](${url})`;
+  });
 }
 
 function resolveImageExtension(headers: unknown): string {

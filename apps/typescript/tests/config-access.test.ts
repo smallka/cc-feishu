@@ -8,6 +8,8 @@ function loadConfig(overrides: Record<string, string | undefined>): AppConfig {
     ...originalEnv,
     FEISHU_APP_ID: 'test-app-id',
     FEISHU_APP_SECRET: 'test-app-secret',
+    FEISHU_ALLOWED_OPEN_IDS: '',
+    FEISHU_OWNER_OPEN_ID: '',
     AGENT_PROVIDER: 'codex',
     NODE_ENV: 'test',
   };
@@ -33,34 +35,32 @@ function loadConfig(overrides: Record<string, string | undefined>): AppConfig {
 }
 
 function main(): void {
+  const allowlistConfig = loadConfig({
+    FEISHU_ALLOWED_OPEN_IDS: 'ou_admin,ou_ops',
+  });
+  assert.deepEqual(
+    allowlistConfig.feishu.allowedOpenIds,
+    ['ou_admin', 'ou_ops'],
+    'allowed open ids should be parsed from FEISHU_ALLOWED_OPEN_IDS',
+  );
+
+  const trimmedConfig = loadConfig({
+    FEISHU_ALLOWED_OPEN_IDS: ' ou_admin , , ou_owner ',
+  });
+  assert.deepEqual(
+    trimmedConfig.feishu.allowedOpenIds,
+    ['ou_admin', 'ou_owner'],
+    'allowed open ids should be trimmed and empty entries removed',
+  );
+
   const ownerOnlyConfig = loadConfig({
-    FEISHU_ALLOWED_OPEN_IDS: undefined,
+    FEISHU_ALLOWED_OPEN_IDS: '',
     FEISHU_OWNER_OPEN_ID: 'ou_owner',
   });
   assert.deepEqual(
     ownerOnlyConfig.feishu.allowedOpenIds,
-    ['ou_owner'],
-    'owner open_id should be allowed even without FEISHU_ALLOWED_OPEN_IDS',
-  );
-
-  const mergedConfig = loadConfig({
-    FEISHU_ALLOWED_OPEN_IDS: 'ou_admin,ou_ops',
-    FEISHU_OWNER_OPEN_ID: 'ou_owner',
-  });
-  assert.deepEqual(
-    mergedConfig.feishu.allowedOpenIds,
-    ['ou_admin', 'ou_ops', 'ou_owner'],
-    'owner open_id should be merged into the allowlist',
-  );
-
-  const dedupedConfig = loadConfig({
-    FEISHU_ALLOWED_OPEN_IDS: 'ou_admin,ou_owner',
-    FEISHU_OWNER_OPEN_ID: 'ou_owner',
-  });
-  assert.deepEqual(
-    dedupedConfig.feishu.allowedOpenIds,
-    ['ou_admin', 'ou_owner'],
-    'owner open_id should not be duplicated in the allowlist',
+    [],
+    'owner open id should be ignored when FEISHU_ALLOWED_OPEN_IDS is unset',
   );
 
   console.log('config-access.test.ts passed');
