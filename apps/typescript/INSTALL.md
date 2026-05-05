@@ -91,18 +91,31 @@ npm start
 
 ### Worktree 独立测试实例
 
-如果主干已经在跑一套 bot，而你要在当前 worktree 手动启动另一套测试 bot，推荐使用仓库内置脚本：
+如果主干已经在跑一套 bot，而你要在当前 worktree 常驻运行另一套测试 bot，推荐直接使用独立的 PM2 配置：
 
-```bash
-python .\scripts\start-test-bot.py
+```powershell
+New-Item -ItemType Directory -Force logs
+npm run build
+pm2 start ecosystem.testbot.config.js
+pm2 save
+```
+
+常用命令：
+
+```powershell
+pm2 status
+pm2 logs cc-feishu-ts-testbot
+pm2 restart cc-feishu-ts-testbot
+pm2 stop cc-feishu-ts-testbot
 ```
 
 说明：
 
-- 脚本会显式指定应用只加载 worktree 根目录下的 `.env.testbot`
-- 一旦使用该脚本，不会再回退读取 `.env`
+- `ecosystem.testbot.config.js` 会显式指定应用只加载 worktree 根目录下的 `.env.testbot`
+- 一旦使用该配置，不会再回退读取 `.env`
 - 这份文件默认使用独立的 `SINGLE_INSTANCE_PORT=18652`
 - 群目录绑定会写入独立文件 `data/chat-bindings.test.json`
+- 日志会落到 `logs/pm2-testbot-out.log` 和 `logs/pm2-testbot-error.log`
 - 启动前只需要把 `.env.testbot` 里的测试飞书应用凭据和测试白名单改成真实值
 - 这套方式不会影响主干实例的本地锁和群绑定状态
 
@@ -130,6 +143,7 @@ pm2 stop cc-feishu-ts
 
 - `ecosystem.config.js` 已固定工作目录为项目根目录，`.env` 会按当前仓库结构自动加载。
 - 默认日志会落到 `logs/pm2-out.log` 和 `logs/pm2-error.log`。
+- 测试 bot 请使用 `ecosystem.testbot.config.js`，不要和主配置混用。
 - 若在 Windows 下使用 `codex` provider，建议在 `.env` 中显式配置 `CODEX_CMD`，避免因运行用户不同导致找不到 Codex CLI。
 - 若在 Windows 11 下遇到 PM2 的 `spawn wmic ENOENT`，可参考 `docs/pm2-win11-pidusage-fix.md`。
 
@@ -193,7 +207,7 @@ npm start
 
 - `CLAUDE_WORK_ROOT` 已废弃，建议改用 `AGENT_WORK_ROOT`
 - 当前版本仍兼容 `CLAUDE_WORK_ROOT`
-- `CHAT_BINDINGS_FILE` 支持相对文件路径，按进程启动目录解析；使用 PM2 时即按 `ecosystem.config.js` 里的 `cwd` 解析
+- `CHAT_BINDINGS_FILE` 支持相对文件路径，按进程启动目录解析；使用 PM2 时即按对应 `ecosystem*.config.js` 里的 `cwd` 解析
 
 ### 收不到消息
 

@@ -46,6 +46,17 @@ pm2 save
 - `pm2 logs cc-feishu-ts`
 - `pm2 restart cc-feishu-ts`
 
+如果要在 worktree 中常驻运行独立测试 bot，使用：
+
+```bash
+npm run build
+pm2 start ecosystem.testbot.config.js
+pm2 save
+```
+
+- `pm2 logs cc-feishu-ts-testbot`
+- `pm2 restart cc-feishu-ts-testbot`
+
 ## 主要目录
 
 - [`src`](./src) - 应用源码
