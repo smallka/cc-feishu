@@ -17,6 +17,9 @@ const {
   resolveChatAccess,
 } = require('../src/bot/chat-access') as typeof import('../src/bot/chat-access');
 const {
+  deriveChatDirectoryName,
+} = require('../src/bot/directory-name') as typeof import('../src/bot/directory-name');
+const {
   ChatManager,
 } = require('../src/bot/chat-manager') as typeof import('../src/bot/chat-manager');
 
@@ -126,6 +129,34 @@ async function main(): Promise<void> {
       binding: savedBinding,
     }), {
       kind: 'unauthorized',
+    });
+
+    assert.deepEqual(deriveChatDirectoryName('项目讨论'), {
+      originalName: '项目讨论',
+      directoryName: '项目讨论',
+      sanitized: false,
+      autoBindable: true,
+    });
+
+    assert.deepEqual(deriveChatDirectoryName('项目/讨论?.'), {
+      originalName: '项目/讨论?.',
+      directoryName: '项目 讨论',
+      sanitized: true,
+      autoBindable: true,
+    });
+
+    assert.deepEqual(deriveChatDirectoryName('CON'), {
+      originalName: 'CON',
+      directoryName: 'CON_group',
+      sanitized: true,
+      autoBindable: true,
+    });
+
+    assert.deepEqual(deriveChatDirectoryName('  ..  '), {
+      originalName: '..',
+      directoryName: null,
+      sanitized: true,
+      autoBindable: false,
     });
 
     const manager = new ChatManager({

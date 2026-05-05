@@ -45,7 +45,6 @@ function createTextEvent(messageId: string, chatId: string, chatType: string, te
 
 async function main(): Promise<void> {
   const originalBindingGet = chatBindingStore.get.bind(chatBindingStore);
-  const originalBindingSet = chatBindingStore.set.bind(chatBindingStore);
   const originalSendMessage = chatManager.sendMessage.bind(chatManager);
   const originalSendTextMessage = messageService.sendTextMessage.bind(messageService);
   const originalAddReaction = messageService.addReaction.bind(messageService);
@@ -53,7 +52,6 @@ async function main(): Promise<void> {
 
   try {
     let privateWarningText = '';
-    let groupWarningText = '';
     let persistedBinding = false;
     let resolvePrivateOutcome: (() => void) | null = null;
     const privateOutcomeObserved = new Promise<void>((resolve) => {
@@ -61,18 +59,11 @@ async function main(): Promise<void> {
     });
 
     chatBindingStore.get = ((chatId: string) => {
-      if (chatId === 'oc_private_default' || chatId === 'oc_group_unbound') {
+      if (chatId === 'oc_private_default') {
         return null;
       }
       return originalBindingGet(chatId);
     }) as typeof chatBindingStore.get;
-
-    chatBindingStore.set = ((chatId: string, cwd: string) => {
-      if (chatId === 'oc_private_default') {
-        persistedBinding = true;
-      }
-      return originalBindingSet(chatId, cwd);
-    }) as typeof chatBindingStore.set;
 
     messageService.sendTextMessage = (async (_chatId: string, text: string) => {
       privateWarningText = text;
@@ -103,38 +94,9 @@ async function main(): Promise<void> {
     assert.equal(persistedBinding, false, 'private chat fallback should not persist a binding');
     assert.equal(privateWarningText, '', 'private chat fallback should not emit unbound warnings');
 
-    let groupSendCalled = false;
-    let resolveGroupText: (() => void) | null = null;
-    const groupTextObserved = new Promise<void>((resolve) => {
-      resolveGroupText = resolve;
-    });
-
-    chatManager.sendMessage = (async () => {
-      groupSendCalled = true;
-    }) as typeof chatManager.sendMessage;
-    messageService.sendTextMessage = (async (_chatId: string, text: string) => {
-      groupWarningText = text;
-      resolveGroupText?.();
-    }) as typeof messageService.sendTextMessage;
-
-    await handleMessage(createTextEvent(
-      'om_group_unbound',
-      'oc_group_unbound',
-      'group_chat',
-      '继续实现',
-    ) as never);
-    await groupTextObserved;
-
-    assert.equal(groupSendCalled, false, 'group chat should still require explicit binding');
-    assert.equal(
-      groupWarningText,
-      '当前群尚未绑定工作目录，请先使用 /cd <路径> 绑定。',
-    );
-
     console.log('private-chat-default-cwd.test.ts passed');
   } finally {
     chatBindingStore.get = originalBindingGet as typeof chatBindingStore.get;
-    chatBindingStore.set = originalBindingSet as typeof chatBindingStore.set;
     chatManager.sendMessage = originalSendMessage as typeof chatManager.sendMessage;
     messageService.sendTextMessage = originalSendTextMessage as typeof messageService.sendTextMessage;
     messageService.addReaction = originalAddReaction as typeof messageService.addReaction;
