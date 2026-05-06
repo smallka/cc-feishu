@@ -13,6 +13,7 @@ import {
 } from '../bot/directory-name';
 import menuContext, { renderMenu, type MenuAction, type MenuContext } from '../bot/menu-context';
 import type { DirectorySummary, SessionSummary, SessionTarget } from '../agent/session-history';
+import type { ActivityEvent, ActivityPhase } from '../agent/types';
 import chatService from '../services/chat.service';
 import messageService from '../services/message.service';
 import config, { type AgentProvider } from '../config';
@@ -21,8 +22,15 @@ const processedMessages = new Set<string>();
 const MAX_CACHE_SIZE = 500;
 const queuedMessages = new Map<string, QueuedMessageTask[]>();
 const activeProcessors = new Map<string, Promise<void>>();
+const activeTaskProgress = new Map<string, ActiveTaskProgress>();
 let acceptingMessages = true;
 const MESSAGE_IDLE_TIMEOUT_MS = 300000;
+const MESSAGE_STARTUP_IDLE_TIMEOUT_MS = 60000;
+const MESSAGE_TURN_START_IDLE_TIMEOUT_MS = 120000;
+const MESSAGE_TURN_RUNNING_IDLE_TIMEOUT_MS = 600000;
+const MESSAGE_RESPONSE_IDLE_TIMEOUT_MS = 60000;
+const MESSAGE_HEARTBEAT_FIRST_MS = 120000;
+const MESSAGE_HEARTBEAT_INTERVAL_MS = 300000;
 const MESSAGE_TIMEOUT_ACTION: 'notify' | 'kill' = 'notify';
 
 interface MessageEvent {
@@ -64,7 +72,27 @@ interface QueuedMessageTask {
 }
 
 interface MessageProcessingOptions {
-  onActivity?: () => void;
+  onActivity?: (event?: ActivityEvent) => void;
+}
+
+interface ProgressState {
+  phase: ActivityPhase;
+  reason: string;
+  method?: string;
+  threadId?: string | null;
+  turnId?: string | null;
+  lastActivityAt: number;
+  activityCount: number;
+}
+
+interface ActiveTaskProgress extends ProgressState {
+  chatId: string;
+  messageId: string;
+  messageType: string;
+  provider: AgentProvider;
+  startedAt: number;
+  queueDelay: number;
+  remainingQueueDepthAtStart: number;
 }
 
 function resolveWorkPath(input: string): string | null {
@@ -700,17 +728,128 @@ function getTotalQueuedMessages(): number {
   return total;
 }
 
+function getActiveTaskStatus(chatId: string): string | null {
+  const progress = activeTaskProgress.get(chatId);
+  if (!progress) {
+    return null;
+  }
+
+  const now = Date.now();
+  const runningDuration = formatDuration((now - progress.startedAt) / 1000);
+  const idleDuration = formatDuration((now - progress.lastActivityAt) / 1000);
+  const lines = [
+    '',
+    '当前任务:',
+    `- 状态: 运行中`,
+    `- 消息类型: ${progress.messageType}`,
+    `- 已运行: ${runningDuration}`,
+    `- 最近无新进展: ${idleDuration}`,
+    `- 当前阶段: ${formatActivityPhase(progress.phase)}`,
+    `- 最近进展: ${progress.reason}`,
+    `- 进展次数: ${progress.activityCount}`,
+    `- 当前排队: ${getChatQueueLength(chatId)} 条`,
+  ];
+
+  if (progress.method) {
+    lines.push(`- 最近事件: ${progress.method}`);
+  }
+  if (progress.turnId) {
+    lines.push(`- Turn: ${progress.turnId.slice(0, 8)}...`);
+  }
+
+  return lines.join('\n');
+}
+
+function getIdleTimeoutForPhase(phase: ActivityPhase): number {
+  switch (phase) {
+    case 'starting':
+    case 'ready':
+      return MESSAGE_STARTUP_IDLE_TIMEOUT_MS;
+    case 'turn_starting':
+      return MESSAGE_TURN_START_IDLE_TIMEOUT_MS;
+    case 'turn_running':
+      return MESSAGE_TURN_RUNNING_IDLE_TIMEOUT_MS;
+    case 'turn_finishing':
+    case 'sending_response':
+    case 'cleanup':
+      return MESSAGE_RESPONSE_IDLE_TIMEOUT_MS;
+    case 'received':
+    default:
+      return MESSAGE_IDLE_TIMEOUT_MS;
+  }
+}
+
+function formatIdleNotice(progress: ProgressState, timeout: number): string {
+  const seconds = Math.round(timeout / 1000);
+  const phaseText = formatActivityPhase(progress.phase);
+  const detailParts = [`最后进展: ${phaseText}`, progress.reason];
+  if (progress.method) {
+    detailParts.push(`事件: ${progress.method}`);
+  }
+  if (progress.turnId) {
+    detailParts.push(`Turn: ${progress.turnId.slice(0, 8)}...`);
+  }
+
+  return `任务运行较久（${seconds}秒内没有新进展）。${detailParts.join('，')}。`;
+}
+
+function formatHeartbeatNotice(progress: ActiveTaskProgress): string {
+  const now = Date.now();
+  return [
+    `任务仍在运行，已运行 ${formatDuration((now - progress.startedAt) / 1000)}。`,
+    `当前阶段: ${formatActivityPhase(progress.phase)}`,
+    `最近进展: ${progress.reason}`,
+    `最近无新进展: ${formatDuration((now - progress.lastActivityAt) / 1000)}`,
+    `当前排队: ${getChatQueueLength(progress.chatId)} 条`,
+  ].join('\n');
+}
+
+function formatActivityPhase(phase: ActivityPhase): string {
+  switch (phase) {
+    case 'received':
+      return '消息已出队';
+    case 'starting':
+      return '启动 app-server';
+    case 'ready':
+      return '会话已就绪';
+    case 'turn_starting':
+      return '正在启动 turn';
+    case 'turn_running':
+      return 'turn 运行中';
+    case 'turn_finishing':
+      return 'turn 收尾中';
+    case 'sending_response':
+      return '发送回复';
+    case 'cleanup':
+      return '清理状态';
+    default:
+      return phase;
+  }
+}
+
 async function processQueuedMessage(task: QueuedMessageTask): Promise<void> {
   const { data } = task;
   const { sender, message } = data;
   const startTime = Date.now();
-  const timeout = MESSAGE_IDLE_TIMEOUT_MS;
   const queueDelay = startTime - task.enqueuedAt;
+  const remainingQueueDepthAtStart = getChatQueueLength(message.chat_id);
   let timeoutTimer: ReturnType<typeof setTimeout> | undefined;
+  let heartbeatTimer: ReturnType<typeof setTimeout> | undefined;
   let watchdogSettled = false;
-  let lastActivityAt = startTime;
-  let activityCount = 0;
   let resolveTimeout: ((result: 'timeout') => void) | null = null;
+  const progress: ActiveTaskProgress = {
+    chatId: message.chat_id,
+    messageId: message.message_id,
+    messageType: task.messageType,
+    provider: chatManager.getProvider(message.chat_id),
+    startedAt: startTime,
+    queueDelay,
+    remainingQueueDepthAtStart,
+    phase: 'received',
+    reason: 'message dequeued',
+    lastActivityAt: startTime,
+    activityCount: 0,
+  };
 
   logger.info('Processing queued message', {
     messageId: message.message_id,
@@ -720,13 +859,20 @@ async function processQueuedMessage(task: QueuedMessageTask): Promise<void> {
     messageType: task.messageType,
     queueDelay,
     imageCount: task.imagePaths?.length ?? 0,
-    remainingQueueDepth: getChatQueueLength(message.chat_id),
+    remainingQueueDepth: remainingQueueDepthAtStart,
   });
 
   const clearWatchdog = () => {
     if (timeoutTimer) {
       clearTimeout(timeoutTimer);
       timeoutTimer = undefined;
+    }
+  };
+
+  const clearHeartbeat = () => {
+    if (heartbeatTimer) {
+      clearTimeout(heartbeatTimer);
+      heartbeatTimer = undefined;
     }
   };
 
@@ -739,22 +885,56 @@ async function processQueuedMessage(task: QueuedMessageTask): Promise<void> {
     timeoutTimer = setTimeout(() => {
       watchdogSettled = true;
       resolveTimeout?.('timeout');
-    }, timeout);
+    }, getIdleTimeoutForPhase(progress.phase));
   };
 
-  const markActivity = () => {
+  const markActivity = (event?: ActivityEvent) => {
     if (watchdogSettled) {
       return;
     }
 
-    lastActivityAt = Date.now();
-    activityCount += 1;
+    progress.lastActivityAt = Date.now();
+    progress.activityCount += 1;
+    if (event) {
+      progress.phase = event.phase;
+      progress.reason = event.reason;
+      progress.method = event.method;
+      progress.threadId = event.threadId;
+      progress.turnId = event.turnId;
+    }
     scheduleTimeout();
   };
 
+  const scheduleHeartbeat = (delay: number) => {
+    if (watchdogSettled) {
+      return;
+    }
+
+    heartbeatTimer = setTimeout(() => {
+      if (watchdogSettled || activeTaskProgress.get(message.chat_id) !== progress) {
+        return;
+      }
+
+      messageService.sendTextMessage(message.chat_id, formatHeartbeatNotice(progress)).catch(error => {
+        logger.error('Failed to send heartbeat notification', {
+          messageId: message.message_id,
+          chatId: message.chat_id,
+          error,
+        });
+      });
+      scheduleHeartbeat(MESSAGE_HEARTBEAT_INTERVAL_MS);
+    }, delay);
+  };
+
+  activeTaskProgress.set(message.chat_id, progress);
+  scheduleHeartbeat(MESSAGE_HEARTBEAT_FIRST_MS);
   const processingPromise = handleMessageInternal(task, startTime, { onActivity: markActivity }).finally(() => {
     watchdogSettled = true;
     clearWatchdog();
+    clearHeartbeat();
+    if (activeTaskProgress.get(message.chat_id) === progress) {
+      activeTaskProgress.delete(message.chat_id);
+    }
   });
   const timeoutPromise = new Promise<'timeout'>((resolve) => {
     resolveTimeout = resolve;
@@ -772,20 +952,26 @@ async function processQueuedMessage(task: QueuedMessageTask): Promise<void> {
     }
 
     const duration = Date.now() - startTime;
-    const idleDuration = Date.now() - lastActivityAt;
+    const idleDuration = Date.now() - progress.lastActivityAt;
+    const timeout = getIdleTimeoutForPhase(progress.phase);
     logger.error('Message processing idle timeout', {
       messageId: message.message_id,
       chatId: message.chat_id,
       duration,
       idleDuration,
       timeout,
-      activityCount,
+      activityCount: progress.activityCount,
+      phase: progress.phase,
+      reason: progress.reason,
+      method: progress.method,
+      threadId: progress.threadId,
+      turnId: progress.turnId,
     });
 
     if (MESSAGE_TIMEOUT_ACTION === 'kill') {
       await messageService.sendTextMessage(
         message.chat_id,
-        `消息处理超时（${Math.round(timeout / 1000)}秒内无进展），已终止当前任务。请重试或使用 /new 重置会话。`,
+        `${formatIdleNotice(progress, timeout)}\n已终止当前任务。请重试或使用 /new 重置会话。`,
       ).catch(error => {
         logger.error('Failed to send timeout notification', { error });
       });
@@ -796,7 +982,7 @@ async function processQueuedMessage(task: QueuedMessageTask): Promise<void> {
     } else {
       await messageService.sendTextMessage(
         message.chat_id,
-        `消息处理超时（${Math.round(timeout / 1000)}秒内无进展），当前任务仍在收尾，后续消息会继续排队。`,
+        `${formatIdleNotice(progress, timeout)}\n当前任务仍在收尾，后续消息会继续排队。可使用 /stop 中断，或使用 /new 重置会话。`,
       ).catch(error => {
         logger.error('Failed to send timeout notification', { error });
       });
@@ -819,6 +1005,10 @@ async function processQueuedMessage(task: QueuedMessageTask): Promise<void> {
     });
   } finally {
     clearWatchdog();
+    clearHeartbeat();
+    if (activeTaskProgress.get(message.chat_id) === progress) {
+      activeTaskProgress.delete(message.chat_id);
+    }
   }
 }
 
@@ -858,7 +1048,10 @@ async function handleMessageInternal(
       return;
     }
 
-    const info = chatManager.getSessionInfo(chatId);
+    const activeTaskStatus = getActiveTaskStatus(chatId);
+    const info = activeTaskStatus
+      ? `${chatManager.getSessionInfo(chatId)}${activeTaskStatus}`
+      : chatManager.getSessionInfo(chatId);
     await messageService.sendTextMessage(chatId, info);
     return;
   }
@@ -999,6 +1192,10 @@ async function handleMessageInternal(
       imagePaths: task.imagePaths,
     });
   } finally {
+    options?.onActivity?.({
+      phase: 'cleanup',
+      reason: 'removing typing reaction',
+    });
     if (reactionId) {
       await messageService.removeReaction(message.message_id, reactionId).catch(error => {
         logger.error('Failed to remove reaction', {

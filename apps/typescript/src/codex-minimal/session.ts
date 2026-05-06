@@ -1,4 +1,5 @@
 import { CodexAppServerSpawnTarget } from '../codex/launch';
+import type { ActivityEvent, OnActivityCallback } from '../agent/types';
 import logger from '../utils/logger';
 import { CodexAppServerProcess, CodexAppServerProcessExit } from './app-server-process';
 import { CodexAppServerRpcClient } from './app-server-rpc';
@@ -16,7 +17,7 @@ export interface SendMessageResult {
 }
 
 export interface CodexMinimalSendMessageOptions {
-  onActivity?: () => void;
+  onActivity?: OnActivityCallback;
   imagePaths?: string[];
 }
 
@@ -41,7 +42,7 @@ type TurnInputItem =
   | { type: 'localImage'; path: string };
 
 type ActiveTurn = {
-  onActivity?: () => void;
+  onActivity?: OnActivityCallback;
   turnId: string | null;
   interruptRequested: boolean;
   finalAgentMessage: string | null;
@@ -217,7 +218,11 @@ export class CodexMinimalSession {
     this.state = 'turn-active';
     const input = buildThreadInput(text, options?.imagePaths);
 
-    notifyActivity(options?.onActivity);
+    notifyActivity(options?.onActivity, {
+      phase: 'turn_starting',
+      reason: 'sending turn/start',
+      threadId: this.threadId,
+    });
 
     logger.info('[CodexMinimalSession] Starting turn/start', {
       workingDirectory: this.workingDirectory,
@@ -336,6 +341,11 @@ export class CodexMinimalSession {
       codexPathOverride: this.codexPathOverride,
       codexArgsPrefix: this.codexArgsPrefix,
     });
+    notifyActivity(this.activeTurn?.onActivity, {
+      phase: 'starting',
+      reason: 'app-server process started',
+      threadId: this.threadId,
+    });
 
     await rpcClient.request('initialize', {
       clientInfo: {
@@ -371,6 +381,11 @@ export class CodexMinimalSession {
 
     this.threadId = threadId;
     this.state = 'ready';
+    notifyActivity(this.activeTurn?.onActivity, {
+      phase: 'ready',
+      reason: this.resumeSessionId ? 'thread resumed' : 'thread started',
+      threadId: this.threadId,
+    });
 
     logger.info('[CodexMinimalSession] App-server session ready', {
       workingDirectory: this.workingDirectory,
@@ -455,7 +470,13 @@ export class CodexMinimalSession {
     const params = isObjectRecord(message.params) ? message.params : {};
 
     if (this.activeTurn && isCurrentThreadActivity(method, params, this.threadId)) {
-      notifyActivity(this.activeTurn.onActivity);
+      notifyActivity(this.activeTurn.onActivity, {
+        phase: getActivityPhaseForMethod(method),
+        reason: describeActivity(method, params),
+        method,
+        threadId: this.threadId,
+        turnId: extractTurnId(params) ?? this.activeTurn.turnId,
+      });
     }
 
     if (!this.threadId || !isCurrentThreadNotification(params, this.threadId)) {
@@ -515,7 +536,7 @@ export class CodexMinimalSession {
     });
   }
 
-  private createActiveTurn(onActivity?: () => void): ActiveTurn {
+  private createActiveTurn(onActivity?: OnActivityCallback): ActiveTurn {
     let resolveTurnPromise: ((result: SendMessageResult) => void) | null = null;
     let rejectTurnPromise: ((error: Error) => void) | null = null;
 
@@ -559,16 +580,57 @@ export class CodexMinimalSession {
   }
 }
 
-function notifyActivity(onActivity?: () => void): void {
+function notifyActivity(onActivity: OnActivityCallback | undefined, event: ActivityEvent): void {
   if (!onActivity) {
     return;
   }
 
   try {
-    onActivity();
+    onActivity(event);
   } catch (error) {
     logger.warn('[CodexMinimalSession] Activity callback failed', { error });
   }
+}
+
+function getActivityPhaseForMethod(method: string): ActivityEvent['phase'] {
+  if (method === 'turn/started') {
+    return 'turn_running';
+  }
+
+  if (method === 'turn/completed') {
+    return 'turn_finishing';
+  }
+
+  return 'turn_running';
+}
+
+function describeActivity(method: string, params: Record<string, unknown>): string {
+  if (method === 'turn/started') {
+    return 'turn started';
+  }
+
+  if (method === 'turn/completed') {
+    const status = extractTurnStatus(params);
+    return status ? `turn completed (${status})` : 'turn completed';
+  }
+
+  if (method === 'item/completed') {
+    const item = params.item;
+    if (isObjectRecord(item)) {
+      const type = normalizeString(item.type);
+      return type ? `item completed (${type})` : 'item completed';
+    }
+  }
+
+  if (method === 'item/started') {
+    const item = params.item;
+    if (isObjectRecord(item)) {
+      const type = normalizeString(item.type);
+      return type ? `item started (${type})` : 'item started';
+    }
+  }
+
+  return method;
 }
 
 function buildThreadInput(text: string, imagePaths?: string[]): TurnInputItem[] {

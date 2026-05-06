@@ -1,6 +1,24 @@
 export type OnResponseCallback = (text: string) => void;
 export type OnErrorCallback = (error: Error) => void;
-export type OnActivityCallback = () => void;
+export type ActivityPhase =
+  | 'received'
+  | 'starting'
+  | 'ready'
+  | 'turn_starting'
+  | 'turn_running'
+  | 'turn_finishing'
+  | 'sending_response'
+  | 'cleanup';
+
+export interface ActivityEvent {
+  phase: ActivityPhase;
+  reason: string;
+  method?: string;
+  threadId?: string | null;
+  turnId?: string | null;
+}
+
+export type OnActivityCallback = (event?: ActivityEvent) => void;
 
 export interface SendMessageOptions {
   onActivity?: OnActivityCallback;

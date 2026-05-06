@@ -204,6 +204,69 @@ async function main() {
     await runPromise;
   }
 
+  {
+    const session = new CodexMinimalSession({
+      workingDirectory: 'C:\\work\\cc-feishu',
+    });
+    const activities: Array<{ phase?: string; reason?: string; method?: string; turnId?: string | null }> = [];
+    const activeTurn = (session as any).createActiveTurn((event: any) => {
+      activities.push(event);
+    });
+
+    (session as any).threadId = 'thread-1';
+    (session as any).activeTurn = activeTurn;
+    (session as any).rpcClient = {
+      getTurnId(): string {
+        return 'turn-activity';
+      },
+      getTurnError(): null {
+        return null;
+      },
+    };
+
+    (session as any).handleAppServerLine(JSON.stringify({
+      jsonrpc: '2.0',
+      method: 'turn/started',
+      params: {
+        threadId: 'thread-1',
+        turn: {
+          id: 'turn-activity',
+        },
+      },
+    }));
+    (session as any).handleAppServerLine(JSON.stringify({
+      jsonrpc: '2.0',
+      method: 'item/completed',
+      params: {
+        threadId: 'thread-1',
+        item: {
+          type: 'agentMessage',
+          text: 'activity response',
+        },
+      },
+    }));
+
+    assert.deepEqual(activities.map(activity => ({
+      phase: activity.phase,
+      reason: activity.reason,
+      method: activity.method,
+      turnId: activity.turnId,
+    })), [
+      {
+        phase: 'turn_running',
+        reason: 'turn started',
+        method: 'turn/started',
+        turnId: 'turn-activity',
+      },
+      {
+        phase: 'turn_running',
+        reason: 'item completed (agentMessage)',
+        method: 'item/completed',
+        turnId: 'turn-activity',
+      },
+    ]);
+  }
+
   console.log('codex-minimal-session.test.ts passed');
 }
 
