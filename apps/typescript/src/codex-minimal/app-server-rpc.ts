@@ -165,10 +165,12 @@ export class CodexAppServerRpcClient {
 
     switch (method) {
       case 'item/commandExecution/requestApproval':
-      case 'execCommandApproval':
       case 'item/fileChange/requestApproval':
-      case 'applyPatchApproval':
         this.respond(message.id, { decision: 'accept' });
+        return;
+      case 'execCommandApproval':
+      case 'applyPatchApproval':
+        this.respond(message.id, { decision: 'approved' });
         return;
       default:
         this.rpcLogger.warn('[CodexAppServerRpcClient] Unhandled server request; replying with empty result', {

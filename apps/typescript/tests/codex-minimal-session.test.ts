@@ -119,6 +119,91 @@ async function main() {
     assert.equal(failureError instanceof TurnAbortedError, false);
   }
 
+  {
+    const session = new CodexMinimalSession({
+      workingDirectory: 'C:\\work\\cc-feishu',
+    });
+    const activeTurn = (session as any).createActiveTurn(undefined);
+
+    (session as any).threadId = 'thread-1';
+    (session as any).activeTurn = activeTurn;
+    (session as any).rpcClient = {
+      getTurnError(): null {
+        return null;
+      },
+    };
+
+    (session as any).handleAppServerLine(JSON.stringify({
+      jsonrpc: '2.0',
+      method: 'item/completed',
+      params: {
+        threadId: 'thread-1',
+        item: {
+          type: 'agentMessage',
+          id: 'item-1',
+          text: 'phase omitted response',
+        },
+      },
+    }));
+    (session as any).handleAppServerLine(JSON.stringify({
+      jsonrpc: '2.0',
+      method: 'turn/completed',
+      params: {
+        threadId: 'thread-1',
+        turn: {
+          id: 'turn-3',
+          status: 'completed',
+        },
+      },
+    }));
+
+    const result = await activeTurn.promise;
+    assert.equal(result.text, 'phase omitted response');
+  }
+
+  {
+    const session = new CodexMinimalSession({
+      workingDirectory: 'C:\\work\\cc-feishu',
+    });
+    let turnStartRequested = false;
+
+    (session as any).threadId = 'thread-1';
+    (session as any).state = 'ready';
+    (session as any).rpcClient = {
+      request(method: string, params: Record<string, unknown>): Promise<Record<string, never>> {
+        assert.equal(method, 'turn/start');
+        turnStartRequested = true;
+        assert.deepEqual(params.input, [
+          { type: 'text', text: 'describe this image', text_elements: [] },
+          { type: 'localImage', path: 'C:\\tmp\\image.png' },
+        ]);
+        return Promise.resolve({});
+      },
+      getTurnError(): null {
+        return null;
+      },
+    };
+
+    const runPromise = (session as any).runTurn('describe this image', {
+      imagePaths: ['C:\\tmp\\image.png'],
+    });
+    await Promise.resolve();
+    assert.equal(turnStartRequested, true);
+    (session as any).handleAppServerLine(JSON.stringify({
+      jsonrpc: '2.0',
+      method: 'turn/completed',
+      params: {
+        threadId: 'thread-1',
+        turn: {
+          id: 'turn-4',
+          status: 'completed',
+        },
+      },
+    }));
+
+    await runPromise;
+  }
+
   console.log('codex-minimal-session.test.ts passed');
 }
 

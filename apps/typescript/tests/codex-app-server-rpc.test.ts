@@ -167,9 +167,9 @@ async function main() {
 
     assert.deepEqual(parseWrites(writer), [
       { jsonrpc: '2.0', id: 41, result: { decision: 'accept' } },
-      { jsonrpc: '2.0', id: 42, result: { decision: 'accept' } },
+      { jsonrpc: '2.0', id: 42, result: { decision: 'approved' } },
       { jsonrpc: '2.0', id: 43, result: { decision: 'accept' } },
-      { jsonrpc: '2.0', id: 44, result: { decision: 'accept' } },
+      { jsonrpc: '2.0', id: 44, result: { decision: 'approved' } },
       { jsonrpc: '2.0', id: 45, result: {} },
     ]);
   }

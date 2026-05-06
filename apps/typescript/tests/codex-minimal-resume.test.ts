@@ -135,6 +135,10 @@ async function main(): Promise<void> {
         ['initialize', 'thread/start'],
       );
       assert.equal(rpcClient.requests[1].params.cwd, 'C:\\work\\repo-alpha');
+      assert.equal(rpcClient.requests[1].params.sandbox, 'danger-full-access');
+      assert.equal('sandboxMode' in rpcClient.requests[1].params, false);
+      assert.equal('skipGitRepoCheck' in rpcClient.requests[1].params, false);
+      assert.equal('networkAccessEnabled' in rpcClient.requests[1].params, false);
       assert.equal((session as any).threadId, 'thread-started');
     }
 
@@ -158,6 +162,8 @@ async function main(): Promise<void> {
       );
       assert.equal(rpcClient.requests[1].params.threadId, 'resume-thread-id');
       assert.equal(rpcClient.requests[1].params.cwd, 'C:\\work\\repo-alpha');
+      assert.equal(rpcClient.requests[1].params.sandbox, 'danger-full-access');
+      assert.equal('persistExtendedHistory' in rpcClient.requests[1].params, false);
       assert.equal((session as any).threadId, 'resume-thread-id');
     }
   } finally {

@@ -37,8 +37,8 @@ export class TurnAbortedError extends Error {
 type SessionState = 'cold' | 'starting' | 'ready' | 'turn-active' | 'closing' | 'closed' | 'broken';
 
 type TurnInputItem =
-  | { type: 'text'; text: string }
-  | { type: 'local_image'; path: string };
+  | { type: 'text'; text: string; text_elements: [] }
+  | { type: 'localImage'; path: string };
 
 type ActiveTurn = {
   onActivity?: () => void;
@@ -354,18 +354,13 @@ export class CodexMinimalSession {
         threadId: this.resumeSessionId,
         cwd: this.workingDirectory,
         approvalPolicy: 'never',
-        persistExtendedHistory: false,
         sandbox: 'danger-full-access',
       });
     } else {
       await rpcClient.request('thread/start', {
         cwd: this.workingDirectory,
         approvalPolicy: 'never',
-        experimentalRawEvents: true,
-        persistExtendedHistory: false,
-        sandboxMode: 'danger-full-access',
-        skipGitRepoCheck: true,
-        networkAccessEnabled: true,
+        sandbox: 'danger-full-access',
       });
     }
 
@@ -579,11 +574,11 @@ function notifyActivity(onActivity?: () => void): void {
 function buildThreadInput(text: string, imagePaths?: string[]): TurnInputItem[] {
   const sanitizedImagePaths = (imagePaths ?? []).filter(Boolean);
   const items: TurnInputItem[] = [
-    { type: 'text', text },
+    { type: 'text', text, text_elements: [] },
   ];
 
   for (const imagePath of sanitizedImagePaths) {
-    items.push({ type: 'local_image', path: imagePath });
+    items.push({ type: 'localImage', path: imagePath });
   }
 
   return items;
@@ -707,7 +702,8 @@ function extractFinalAgentMessage(params: Record<string, unknown>): string | nul
     return null;
   }
 
-  if (item.phase !== 'final_answer') {
+  const phase = normalizeString(item.phase);
+  if (phase && phase !== 'final_answer') {
     return null;
   }
 

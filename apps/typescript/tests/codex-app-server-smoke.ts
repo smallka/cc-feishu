@@ -156,8 +156,6 @@ async function run() {
 
   const threadResponse = await request('thread/start', {
     cwd: expectedCwd,
-    experimentalRawEvents: true,
-    persistExtendedHistory: false,
     approvalPolicy: 'untrusted',
   });
 
@@ -171,6 +169,7 @@ async function run() {
       {
         type: 'text',
         text: `Run the exact read-only command \`${expectedCommand}\` to print the current working directory. Do not guess or infer it without running the command. Your final answer must include the exact directory string returned by that command, verbatim: ${expectedCwd}.`,
+        text_elements: [],
       },
     ],
   });
@@ -430,7 +429,7 @@ function extractFinalAgentMessage(params: Record<string, unknown> | undefined): 
   }
 
   const phase = (item as { phase?: unknown }).phase;
-  if (phase !== 'final_answer') {
+  if (typeof phase === 'string' && phase !== 'final_answer') {
     return null;
   }
 
