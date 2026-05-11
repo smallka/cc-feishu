@@ -1,8 +1,33 @@
+# Environment
+.env
+.env.local
+.env.testbot
+
+# Dependencies and build output
+node_modules/
+/dist/
+*.tsbuildinfo
+
+# Logs and temp files
+*.log
+logs/
+tmp/
+
+# Local state
+.sessions.json
+.claude/settings.local.json
+data/chat-bindings.json
+data/chat-bindings.test.json
+data/chat-bindings.json.e2e-backup-*
+
 # Repository-local tooling
-/.claude/settings.local.json
 /.vscode/
 /.idea/
 /.worktrees/
+
+# Editor noise
+*.swp
+*.swo
 
 # OS noise
 /.DS_Store

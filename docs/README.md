@@ -13,6 +13,6 @@ This directory is the repository-level documentation area for the TypeScript app
 ## Scope
 
 - Keep repository-wide notes here.
-- Keep app-specific notes close to the app under `apps/typescript`.
-- `apps/typescript/docs` is preserved as a historical snapshot from the restored `typescript-final` implementation.
+- App-specific notes now also live here when they are long-lived documentation, because the TypeScript app root is the repository root.
+- The former app-local docs content has been moved into this directory and remains a historical snapshot from the restored `typescript-final` implementation.
 - Python runtime notes are historical references only; the Python app directory has been removed.

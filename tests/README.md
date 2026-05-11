@@ -168,4 +168,4 @@ npm run test:tool-use
 ## 参考文档
 
 - [STDIO_PROTOCOL.md](../docs/STDIO_PROTOCOL.md) - 完整的协议文档
-- [Python SDK](../../claude-agent-sdk-python/) - 官方实现参考
+- Python SDK 历史分析见 [docs/PYTHON_SDK_ANALYSIS.md](../docs/PYTHON_SDK_ANALYSIS.md)

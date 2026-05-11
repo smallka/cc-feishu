@@ -1,4 +1,4 @@
-> Historical note (2026-03-11): this migration design predates the monorepo layout. Python paths now live under `apps/python/...`; older TypeScript references now live under `apps/typescript/...`.
+> Historical note (2026-05-11): this migration design predates later repository layout changes. The historical Python implementation has been removed, and the TypeScript app now lives at the repository root.
 
 # 飞书机器�?Python 迁移设计文档
 

@@ -1,4 +1,4 @@
-> Historical note (2026-03-11): this TypeScript design predates the monorepo layout. Paths like `src/...` now refer to `apps/typescript/src/...`.
+> Historical note (2026-05-11): this TypeScript design predates later repository layout changes. Paths like `src/...` now refer to the repository-root TypeScript app.
 
 # Agent 对象抽象设计
 

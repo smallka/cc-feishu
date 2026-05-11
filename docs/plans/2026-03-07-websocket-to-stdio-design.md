@@ -1,4 +1,4 @@
-> Historical note (2026-03-11): this TypeScript design predates the monorepo layout. Paths like `src/...` and `tests/...` now refer to `apps/typescript/src/...` and `apps/typescript/tests/...`.
+> Historical note (2026-05-11): this TypeScript design predates later repository layout changes. Paths like `src/...` and `tests/...` now refer to the repository-root TypeScript app.
 
 # WebSocket 迁移�?stdin/stdout 模式设计方案
 

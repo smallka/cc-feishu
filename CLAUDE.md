@@ -162,13 +162,13 @@ logger.info('Creating agent');
 
 ## 技术规范
 
-- [docs/PROTOCOL_SPEC.md](../../docs/PROTOCOL_SPEC.md) - Claude Code 完整协议规范（NDJSON over stdio/WebSocket）
+- [docs/PROTOCOL_SPEC.md](docs/PROTOCOL_SPEC.md) - Claude Code 完整协议规范（NDJSON over stdio/WebSocket）
 
 ## 参考文档
 
 - [INSTALL.md](INSTALL.md) - 安装配置指南
-- [docs/STDIO_QUICKSTART.md](../../docs/STDIO_QUICKSTART.md) - stdio 通信快速上手
-- [docs/PYTHON_SDK_ANALYSIS.md](../../docs/PYTHON_SDK_ANALYSIS.md) - Python SDK 实现分析
+- [docs/STDIO_QUICKSTART.md](docs/STDIO_QUICKSTART.md) - stdio 通信快速上手
+- [docs/PYTHON_SDK_ANALYSIS.md](docs/PYTHON_SDK_ANALYSIS.md) - Python SDK 实现分析
 
 ## 许可证
 
