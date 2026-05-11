@@ -40,4 +40,3 @@ vendor/   随仓库维护的最小依赖快照
 ```
 
 - [`INSTALL.md`](./INSTALL.md) - 安装、配置与启动说明
-- [`docs/README.md`](./docs/README.md) - 文档入口
