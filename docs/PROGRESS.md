@@ -9,11 +9,11 @@
 
 ## 当前任务
 
-- 状态：not_started
-- 任务：删除 Python 历史实现，并将仓库结构收敛回单一 TypeScript 实现。
-- scope：`apps/python/`、根 README、相关 docs、路径引用、验证入口。
+- 状态：validated
+- 任务：生成 Python 与 TypeScript 运行时边界备忘文档，作为删除 Python 版后的参考。
+- scope：`docs/PYTHON_TYPESCRIPT_RUNTIME_BOUNDARY_NOTES.md`、`docs/PROGRESS.md`、`docs/task-archive/T0002-2026-05-11-runtime-boundary-notes.md`。
 - 验证命令：`cd apps/typescript && npm run build`
-- 当前观察项：TypeScript 测试脚本和依赖声明存在已知不一致，结构收敛任务不应顺手修复测试矩阵。
+- 当前观察项：本文档只记录由语言或平台导致、对实现影响很大且不能简单替换的运行时边界差异；不比较业务功能差异，也不执行 Python 删除。
 
 ## 下一任务
 
