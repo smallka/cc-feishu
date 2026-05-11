@@ -35,3 +35,12 @@
 - Evidence：`docs/` 已存在多份历史计划与报告，用户确认本轮只推进 harness 配置。
 - Consequences：新增任务归档使用 `docs/task-archive/` 一任务一文件；旧文档保持原状，后续如需整理应作为单独任务。
 - Revisit when：用户明确要求整理历史文档或统一归档格式。
+- Superseded：已被 2026-05-11 “删除非当前维护入口的旧文档”取代。
+
+### 2026-05-11 - 删除非当前维护入口的旧文档
+
+- Decision：删除 TODO 文档、`docs/plans/`、`CLAUDE.md`、`tests/README.md`、早期 init plan、旧协议别名和编码损坏的 Python SDK 历史分析；当前文档入口只保留最小 README、安装说明、协议说明、运行时边界备忘、PM2 记录和 agent harness 文档。
+- Rationale：用户明确要求 TODO 文档不再保留，历史 plans 可删除，README 只保留最小给人看的部分，并删除 CLAUDE 与 tests README；旧 Python SDK 分析和协议别名已不应作为当前事实来源。
+- Evidence：见 `docs/task-archive/T0006-2026-05-11-prune-legacy-docs.md`。
+- Consequences：后续任务池不再依赖 TODO 文档；当前任务和下一步只写入 `docs/PROGRESS.md`，长期决策写入本文件，任务证据写入 `docs/task-archive/`。
+- Revisit when：用户要求恢复某类历史设计记录，或需要重新建立当前维护用的任务池文档。
