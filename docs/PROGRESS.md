@@ -5,24 +5,24 @@
 - 当前阶段：TypeScript 单实现主线。
 - 当前有效基线：TypeScript 应用位于仓库根目录；Python 历史实现已删除。
 - 默认验证命令：`npm run verify`
-- 当前任务来源：用户要求推进“收敛测试入口”。
+- 当前任务来源：用户要求继续深挖并收敛 Feishu 消息处理 Module 的命令路由。
 
 ## 当前任务
 
 - 状态：validated
-- 任务：新增测试环境真实配置文件。
-- scope：创建本地 `.env.testbot`，让测试飞书应用与正式 `.env` 参数分离；不提交真实密钥，不修改业务代码。
+- 任务：抽取 Feishu 消息命令路由 Module。
+- scope：在保持外部行为不变的前提下，从 `src/handlers/message.handler.ts` 抽出命令路由内部 Module；不改变 `/stop`、`/new` 即时控制，不调整媒体下载鉴权顺序，不改 `/stat` 排队语义。
 - 验证命令：`npm run verify`
-- 验证结果：passed，`npm run verify` 已在仓库根成功执行 `tsc` 和全部 `tests/*.test.ts`；构建产物读取 `.env.testbot` 后确认测试 app id、测试 bot 日志中的真实 open_id allowlist、`C:\work` 工作根目录、独立绑定文件、单实例端口和 development 环境标识生效。
-- 归档：`docs/task-archive/T0009-2026-05-11-add-testbot-env.md`
-- 当前观察项：`.env.testbot` 已在 `.gitignore` 中，不会进入版本库；测试环境 open_id 来自 2026-05-11 21:28:53 的测试 bot `/stat` 拒绝日志。未重新启动真实 PM2 测试 bot；本任务验证配置加载与自动测试，不验证飞书开放平台侧配置是否完整。
+- 验证结果：passed，`npm run verify` 已在仓库根成功执行 `tsc` 和全部 `tests/*.test.ts`；新增 `message-command-router.test.ts` 覆盖 `/stat`、`/agent`、未知命令和普通消息投递，既有 `/cd`、自动绑定、无效绑定、私聊默认目录和 resume 相关测试继续通过。
+- 归档：`docs/task-archive/T0010-2026-05-11-extract-message-command-router.md`
+- 当前观察项：命令路由已集中到 `src/bot/message-command-router.ts`，`message.handler` 仍负责 Feishu intake、权限/绑定、群自动绑定、队列、watchdog 和进度通知；媒体下载鉴权前移与 `/stat` 即时化仍是独立后续任务。
 
 ## 下一任务
 
-- 独立任务：深挖 Feishu 消息处理 Module。
+- 独立任务：继续收敛 Feishu 消息处理 Module。
   - Files：`src/handlers/message.handler.ts`、`src/bot/chat-manager.ts`
   - Problem：Feishu message intake 同时承担消息解析、权限、自动绑定、菜单、命令路由、队列、watchdog、进度通知和回复投递；Interface 虽小，但 Implementation 中的状态和顺序知识过度集中。
-  - Solution：在保持外部入口不变的前提下，拆分命令路由、任务队列/进度、媒体 intake 的内部 Module，提升 Locality 并让测试围绕更稳定的 seams 编写。
+  - Solution：下一步优先处理媒体 intake 的 access gate 前移，或评估 `/stat` 是否应作为即时控制命令；继续提升 Locality 并让测试围绕更稳定的 seams 编写。
 - 独立任务：深挖 Codex app-server 会话状态机。
   - Files：`src/codex-minimal/session.ts`、`src/codex-minimal/app-server-rpc.ts`、`src/codex-minimal/app-server-process.ts`
   - Problem：`CodexMinimalSession` 同时处理进程生命周期、JSON-RPC、thread start/resume、turn 状态、通知解析、最终回答提取、interrupt 和错误归因；状态转换风险集中但测试面偏重私有细节。
