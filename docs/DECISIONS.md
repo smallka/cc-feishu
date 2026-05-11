@@ -6,10 +6,10 @@
 
 ### 2026-05-11 - 以 TypeScript 作为唯一长期实现
 
-- Decision：后续只保留并演进 TypeScript 实现，Python 版作为历史实现计划删除。
-- Rationale：用户明确确认 Python 版后续删除，仓库结构也将从双实现收敛回单实现。
+- Decision：后续只保留并演进 TypeScript 实现，Python 历史实现已删除。
+- Rationale：用户明确确认 Python 版删除，仓库结构已从双实现收敛回单实现。
 - Evidence：用户在 2026-05-11 的 harness 体检反馈中确认该方向；见 `docs/task-archive/T0001-2026-05-11-agent-harness-init.md`。
-- Consequences：新开发、验证入口和 agent 配置优先面向 `apps/typescript/`；不要投入修复 `apps/python/CLAUDE.md`。
+- Consequences：新开发、验证入口和 agent 配置面向 `apps/typescript/`；不要引用已删除的 `apps/python/` 作为当前事实。
 - Revisit when：TypeScript 版被明确放弃，或用户要求重新保留 Python 实现。
 
 ### 2026-05-11 - 使用 harness 文档拆分 agent 状态与决策

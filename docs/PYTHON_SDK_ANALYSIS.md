@@ -836,4 +836,4 @@ function listSessions(cwd: string): SessionInfo[] {
 - [Claude Agent SDK Python 仓库](https://github.com/anthropics/claude-agent-sdk-python)
 - [本地克隆路径](c:\work\claude-agent-sdk-python)
 - [我们的协议文档](./PROTOCOL_SPEC.md)
-- [我们的项目文档](../apps/python/CLAUDE.md)
+- [我们的项目文档](./PYTHON_TYPESCRIPT_RUNTIME_BOUNDARY_NOTES.md)

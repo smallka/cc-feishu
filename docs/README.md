@@ -1,6 +1,6 @@
 # Repository Docs
 
-This directory is the repository-level documentation area for the parallel Python and TypeScript apps.
+This directory is the repository-level documentation area for the TypeScript app and its historical design records.
 
 ## Contents
 
@@ -12,6 +12,7 @@ This directory is the repository-level documentation area for the parallel Pytho
 
 ## Scope
 
-- Keep cross-app or repository-wide notes here.
-- Keep app-specific notes close to the app under `apps/python` or `apps/typescript`.
+- Keep repository-wide notes here.
+- Keep app-specific notes close to the app under `apps/typescript`.
 - `apps/typescript/docs` is preserved as a historical snapshot from the restored `typescript-final` implementation.
+- Python runtime notes are historical references only; the Python app directory has been removed.
