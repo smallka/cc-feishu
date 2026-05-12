@@ -5,24 +5,24 @@
 - 当前阶段：TypeScript 单实现主线。
 - 当前有效基线：TypeScript 应用位于仓库根目录；Python 历史实现已删除。
 - 默认验证命令：`npm run verify`
-- 当前任务来源：用户确认继续收敛 Feishu 消息处理 Module，优先处理媒体 intake 的 access gate 前移。
+- 当前任务来源：用户确认继续收敛 Feishu 消息处理 Module，已完成 `/stat` 即时化。
 
 ## 当前任务
 
 - 状态：validated
-- 任务：前移媒体消息 access gate。
-- scope：在保持文本命令和队列语义不变的前提下，让图片/文件消息先经过权限、绑定和无效绑定检查，再触发飞书媒体下载；不改变 `/stop`、`/new` 即时控制，不调整 `/stat` 排队语义。
+- 任务：让 `/stat` 成为即时状态命令。
+- scope：在保持 access gate、绑定检查和现有状态输出不变的前提下，让 `/stat` 像 `/stop`、`/new` 一样绕过普通消息队列，便于长任务运行期间立即查看当前会话、当前任务和排队状态。
 - 验证命令：`npm run verify`
-- 验证结果：passed，`npm run verify` 已在仓库根成功执行 `tsc` 和全部 `tests/*.test.ts`；新增 `media-access-gate.test.ts` 覆盖未授权图片、未绑定文件、无效绑定图片都不会调用下载方法，既有命令路由、`/cd`、自动绑定、无效绑定、私聊默认目录和 resume 相关测试继续通过。
-- 归档：`docs/task-archive/T0011-2026-05-12-move-media-access-gate.md`
-- 当前观察项：图片/文件消息现在先解析轻量元数据并通过 access gate，之后才触发媒体下载；媒体 JSON 解析仍在 access gate 前，但不会访问远端资源或写本地文件。`/stat` 即时化仍是独立后续任务。
+- 验证结果：passed，`npm run verify` 已在仓库根成功执行 `tsc` 和全部 `tests/*.test.ts`；新增 `stat-immediate-handler.test.ts` 覆盖长任务运行期间 `/stat` 不等待普通队列即可返回当前任务状态，既有 `/cd`、`/new`、无效绑定、媒体 access gate、自动绑定、私聊默认目录、resume、命令路由和 websocket dispatcher 测试继续通过。
+- 归档：`docs/task-archive/T0012-2026-05-12-make-stat-immediate.md`
+- 当前观察项：`/stat` 现在在 access gate 通过后、普通消息入队前执行；未授权、未绑定和无效绑定行为保持既有约束。队列、watchdog、进度通知仍集中在 `message.handler`，职责收敛还需要后续独立任务继续推进。
 
 ## 下一任务
 
 - 独立任务：继续收敛 Feishu 消息处理 Module。
   - Files：`src/handlers/message.handler.ts`、`src/bot/chat-manager.ts`
   - Problem：Feishu message intake 同时承担消息解析、权限、自动绑定、菜单、命令路由、队列、watchdog、进度通知和回复投递；Interface 虽小，但 Implementation 中的状态和顺序知识过度集中。
-  - Solution：下一步评估 `/stat` 是否应作为即时控制命令，或继续拆分队列/watchdog/进度通知；继续提升 Locality 并让测试围绕更稳定的 seams 编写。
+  - Solution：继续拆分队列/watchdog/进度通知，提升 Locality 并让测试围绕更稳定的 seams 编写。
 - 独立任务：深挖 Codex app-server 会话状态机。
   - Files：`src/codex-minimal/session.ts`、`src/codex-minimal/app-server-rpc.ts`、`src/codex-minimal/app-server-process.ts`
   - Problem：`CodexMinimalSession` 同时处理进程生命周期、JSON-RPC、thread start/resume、turn 状态、通知解析、最终回答提取、interrupt 和错误归因；状态转换风险集中但测试面偏重私有细节。

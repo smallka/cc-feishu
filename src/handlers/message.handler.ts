@@ -303,6 +303,11 @@ async function prepareMessageTask(data: MessageEvent): Promise<void> {
     return;
   }
 
+  if (parsedTask.messageType === 'text' && parsedTask.text === '/stat') {
+    await handleImmediateStatus(parsedTask);
+    return;
+  }
+
   const task = await materializeQueuedTask(parsedTask);
   if (!task) {
     return;
@@ -360,6 +365,16 @@ async function handleImmediateReset(chatId: string): Promise<void> {
 
   const droppedSuffix = droppedCount > 0 ? `，已清空 ${droppedCount} 条排队消息` : '';
   await messageService.sendTextMessage(chatId, `会话已重置${droppedSuffix}，可以开始新的对话。\n工作目录: ${cwd}`);
+}
+
+async function handleImmediateStatus(task: ParsedMessageTask): Promise<void> {
+  await handleMessageCommand({
+    text: task.text,
+    messageType: task.messageType,
+    message: task.data.message,
+  }, {
+    getActiveTaskStatus,
+  });
 }
 
 function rememberProcessedMessage(messageId: string): void {
