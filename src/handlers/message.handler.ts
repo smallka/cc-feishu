@@ -65,6 +65,15 @@ interface FileMessageContent {
   file_name?: string;
 }
 
+interface ParsedMessageTask {
+  data: MessageEvent;
+  text: string;
+  messageType: string;
+  imageKey?: string;
+  fileKey?: string;
+  fileName?: string;
+}
+
 interface QueuedMessageTask {
   data: MessageEvent;
   text: string;
@@ -222,8 +231,8 @@ async function prepareMessageTask(data: MessageEvent): Promise<void> {
     return;
   }
 
-  const task = await createQueuedTask(data);
-  if (!task) {
+  const parsedTask = parseMessageTask(data);
+  if (!parsedTask) {
     return;
   }
 
@@ -231,10 +240,10 @@ async function prepareMessageTask(data: MessageEvent): Promise<void> {
 
   let binding = chatBindingStore.get(chatId);
   let bindingValid = !binding || isDirectoryAvailable(binding.cwd);
-  const hasActiveMenuSelection = /^\d$/.test(task.text) && menuContext.get(chatId) !== null;
+  const hasActiveMenuSelection = /^\d$/.test(parsedTask.text) && menuContext.get(chatId) !== null;
 
   let access = resolveChatAccess({
-    text: task.text,
+    text: parsedTask.text,
     senderOpenId: sender.sender_id.open_id,
     allowedOpenIds: config.feishu.allowedOpenIds,
     binding,
@@ -250,8 +259,8 @@ async function prepareMessageTask(data: MessageEvent): Promise<void> {
       senderOpenId: sender.sender_id.open_id,
       allowedOpenIds: config.feishu.allowedOpenIds,
       chatType: message.chat_type,
-      messageType: task.messageType,
-      text: task.text,
+      messageType: parsedTask.messageType,
+      text: parsedTask.text,
     });
     await messageService.sendTextMessage(chatId, getUnauthorizedText(sender.sender_id.open_id));
     return;
@@ -269,7 +278,7 @@ async function prepareMessageTask(data: MessageEvent): Promise<void> {
     binding = chatBindingStore.get(chatId);
     bindingValid = !binding || isDirectoryAvailable(binding.cwd);
     access = resolveChatAccess({
-      text: task.text,
+      text: parsedTask.text,
       senderOpenId: sender.sender_id.open_id,
       allowedOpenIds: config.feishu.allowedOpenIds,
       binding,
@@ -284,13 +293,18 @@ async function prepareMessageTask(data: MessageEvent): Promise<void> {
     return;
   }
 
-  if (task.messageType === 'text' && task.text === '/stop') {
+  if (parsedTask.messageType === 'text' && parsedTask.text === '/stop') {
     await handleImmediateStop(chatId);
     return;
   }
 
-  if (task.messageType === 'text' && task.text === '/new') {
+  if (parsedTask.messageType === 'text' && parsedTask.text === '/new') {
     await handleImmediateReset(chatId);
+    return;
+  }
+
+  const task = await materializeQueuedTask(parsedTask);
+  if (!task) {
     return;
   }
 
@@ -753,19 +767,19 @@ async function handleMessageInternal(
   }
 }
 
-async function createQueuedTask(data: MessageEvent): Promise<QueuedMessageTask | null> {
+function parseMessageTask(data: MessageEvent): ParsedMessageTask | null {
   const { message } = data;
 
   if (message.message_type === 'text') {
-    return createTextTask(data);
+    return parseTextTask(data);
   }
 
   if (message.message_type === 'image') {
-    return createImageTask(data);
+    return parseImageTask(data);
   }
 
   if (message.message_type === 'file') {
-    return createFileTask(data);
+    return parseFileTask(data);
   }
 
   logger.debug('Skipping unsupported message type', {
@@ -776,7 +790,7 @@ async function createQueuedTask(data: MessageEvent): Promise<QueuedMessageTask |
   return null;
 }
 
-function createTextTask(data: MessageEvent): QueuedMessageTask | null {
+function parseTextTask(data: MessageEvent): ParsedMessageTask | null {
   const { message } = data;
 
   let content: TextMessageContent;
@@ -804,18 +818,12 @@ function createTextTask(data: MessageEvent): QueuedMessageTask | null {
     data,
     text,
     messageType: 'text',
-    enqueuedAt: Date.now(),
   };
 }
 
-async function createImageTask(data: MessageEvent): Promise<QueuedMessageTask | null> {
+function parseImageTask(data: MessageEvent): ParsedMessageTask | null {
   const { message } = data;
   const chatId = message.chat_id;
-
-  if (chatManager.getProvider(chatId) !== 'codex') {
-    await messageService.sendTextMessage(chatId, '当前仅 Codex 支持图片消息，请先使用 /agent 切换到 Codex。');
-    return null;
-  }
 
   let content: ImageMessageContent;
   try {
@@ -838,35 +846,17 @@ async function createImageTask(data: MessageEvent): Promise<QueuedMessageTask | 
     return null;
   }
 
-  try {
-    const imagePath = await messageService.downloadMessageImage(message.message_id, imageKey);
-    return {
-      data,
-      text: '用户发送了一张图片，请结合图片内容继续处理当前请求。',
-      messageType: 'image',
-      imagePaths: [imagePath],
-      enqueuedAt: Date.now(),
-    };
-  } catch (error) {
-    logger.error('Failed to download image message resource', {
-      messageId: message.message_id,
-      chatId,
-      imageKey,
-      error,
-    });
-    await messageService.sendTextMessage(chatId, '图片下载失败，请稍后重试。');
-    return null;
-  }
+  return {
+    data,
+    text: '用户发送了一张图片，请结合图片内容继续处理当前请求。',
+    messageType: 'image',
+    imageKey,
+  };
 }
 
-async function createFileTask(data: MessageEvent): Promise<QueuedMessageTask | null> {
+function parseFileTask(data: MessageEvent): ParsedMessageTask | null {
   const { message } = data;
   const chatId = message.chat_id;
-
-  if (chatManager.getProvider(chatId) !== 'codex') {
-    await messageService.sendTextMessage(chatId, '当前仅 Codex 支持文件消息，请先使用 /agent 切换到 Codex。');
-    return null;
-  }
 
   let content: FileMessageContent;
   try {
@@ -889,18 +879,106 @@ async function createFileTask(data: MessageEvent): Promise<QueuedMessageTask | n
     return null;
   }
 
+  return {
+    data,
+    text: '用户发送了一个文件。',
+    messageType: 'file',
+    fileKey,
+    fileName: content.file_name,
+  };
+}
+
+async function materializeQueuedTask(task: ParsedMessageTask): Promise<QueuedMessageTask | null> {
+  if (task.messageType === 'text') {
+    return {
+      data: task.data,
+      text: task.text,
+      messageType: task.messageType,
+      enqueuedAt: Date.now(),
+    };
+  }
+
+  if (task.messageType === 'image') {
+    return materializeImageTask(task);
+  }
+
+  if (task.messageType === 'file') {
+    return materializeFileTask(task);
+  }
+
+  return null;
+}
+
+async function materializeImageTask(task: ParsedMessageTask): Promise<QueuedMessageTask | null> {
+  const { message } = task.data;
+  const chatId = message.chat_id;
+  const imageKey = task.imageKey;
+
+  if (chatManager.getProvider(chatId) !== 'codex') {
+    await messageService.sendTextMessage(chatId, '当前仅 Codex 支持图片消息，请先使用 /agent 切换到 Codex。');
+    return null;
+  }
+
+  if (!imageKey) {
+    logger.warn('Skipping image message without image key', {
+      messageId: message.message_id,
+      chatId,
+    });
+    return null;
+  }
+
   try {
-    const filePath = await messageService.downloadMessageFile(message.message_id, fileKey, content.file_name);
+    const imagePath = await messageService.downloadMessageImage(message.message_id, imageKey);
+    return {
+      data: task.data,
+      text: task.text,
+      messageType: task.messageType,
+      imagePaths: [imagePath],
+      enqueuedAt: Date.now(),
+    };
+  } catch (error) {
+    logger.error('Failed to download image message resource', {
+      messageId: message.message_id,
+      chatId,
+      imageKey,
+      error,
+    });
+    await messageService.sendTextMessage(chatId, '图片下载失败，请稍后重试。');
+    return null;
+  }
+}
+
+async function materializeFileTask(task: ParsedMessageTask): Promise<QueuedMessageTask | null> {
+  const { message } = task.data;
+  const chatId = message.chat_id;
+  const fileKey = task.fileKey;
+  const fileName = task.fileName;
+
+  if (chatManager.getProvider(chatId) !== 'codex') {
+    await messageService.sendTextMessage(chatId, '当前仅 Codex 支持文件消息，请先使用 /agent 切换到 Codex。');
+    return null;
+  }
+
+  if (!fileKey) {
+    logger.warn('Skipping file message without file key', {
+      messageId: message.message_id,
+      chatId,
+    });
+    return null;
+  }
+
+  try {
+    const filePath = await messageService.downloadMessageFile(message.message_id, fileKey, fileName);
     const prompt = [
-      `用户发送了一个文件${content.file_name ? `：${content.file_name}` : ''}。`,
+      `用户发送了一个文件${fileName ? `：${fileName}` : ''}。`,
       `文件已保存到本地路径：${filePath}`,
       '请先读取该文件，再继续处理当前请求。',
     ].join('\n');
 
     return {
-      data,
+      data: task.data,
       text: prompt,
-      messageType: 'file',
+      messageType: task.messageType,
       enqueuedAt: Date.now(),
     };
   } catch (error) {
@@ -908,7 +986,7 @@ async function createFileTask(data: MessageEvent): Promise<QueuedMessageTask | n
       messageId: message.message_id,
       chatId,
       fileKey,
-      fileName: content.file_name,
+      fileName,
       error,
     });
     await messageService.sendTextMessage(chatId, '文件下载失败，请稍后重试。');
