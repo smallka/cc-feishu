@@ -286,19 +286,11 @@ async function prepareMessageTask(data: MessageEvent): Promise<void> {
     return;
   }
 
-  if (parsedTask.messageType === 'text' && parsedTask.text === '/stop') {
-    await handleImmediateStop(chatId);
-    return;
-  }
-
-  if (parsedTask.messageType === 'text' && parsedTask.text === '/new') {
-    await handleImmediateReset(chatId);
-    return;
-  }
-
-  if (parsedTask.messageType === 'text' && parsedTask.text === '/stat') {
-    await handleImmediateStatus(parsedTask);
-    return;
+  if (parsedTask.messageType === 'text') {
+    const controlHandled = await handleControlMessage(parsedTask);
+    if (controlHandled) {
+      return;
+    }
   }
 
   const task = await materializeQueuedTask(parsedTask);
@@ -368,6 +360,41 @@ async function handleImmediateStatus(task: ParsedMessageTask): Promise<void> {
   }, {
     getActiveTaskStatus,
   });
+}
+
+async function handleControlMessage(task: ParsedMessageTask): Promise<boolean> {
+  const { text } = task;
+  const chatId = task.data.message.chat_id;
+  const hasActiveMenuSelection = /^\d$/.test(text) && menuContext.get(chatId) !== null;
+
+  if (text === '/stop') {
+    await handleImmediateStop(chatId);
+    return true;
+  }
+
+  if (text === '/new') {
+    await handleImmediateReset(chatId);
+    return true;
+  }
+
+  if (text === '/stat') {
+    await handleImmediateStatus(task);
+    return true;
+  }
+
+  if (!text.startsWith('/') && !hasActiveMenuSelection) {
+    return false;
+  }
+
+  const handled = await handleMessageCommand({
+    text,
+    messageType: task.messageType,
+    message: task.data.message,
+  }, {
+    getActiveTaskStatus,
+  });
+
+  return handled.kind === 'command';
 }
 
 function rememberProcessedMessage(messageId: string): void {

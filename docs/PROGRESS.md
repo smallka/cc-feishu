@@ -5,23 +5,23 @@
 - 当前阶段：TypeScript 单实现主线。
 - 当前有效基线：TypeScript 应用位于仓库根目录；Python 历史实现已删除。
 - 默认验证命令：`npm run verify`
-- 当前任务来源：用户确认继续收敛 Feishu 消息处理 Module；已移除 heartbeat 和 timeout notify，保留主动 `/stat` 查询。
+- 当前任务来源：用户确认继续收敛 Feishu 消息处理 Module；已把控制命令从普通 FIFO 队列中剥离，保留 agent workload 进队列。
 
 ## 当前任务
 
 - 状态：validated
-- 任务：移除消息处理 heartbeat 和 timeout notify 前置复杂度。
-- scope：在保持 per-chat 串行队列、`/stat` 主动查询、`/new` 清等待队列和 `/stop` interrupt 行为不变的前提下，移除长任务 heartbeat 定时通知和 idle timeout notify/kill 分支，为后续提取队列/状态 Module 降低异步复杂度。
+- 任务：控制命令即时化，队列只收 agent workload。
+- scope：在保持 access gate、per-chat 串行队列、`/new` 清等待队列、`/stop` interrupt、`/stat` 主动查询和菜单选择语义不变的前提下，让 `/help`、`/agent`、`/debug`、`/cd`、`/resume`、未知 slash command 和菜单数字选择即时处理，不进入普通 FIFO 队列。
 - 验证命令：`npm run verify`
-- 验证结果：passed，`npm run verify` 已在仓库根成功执行 `tsc` 和全部 `tests/*.test.ts`；`stat-immediate-handler.test.ts` 继续覆盖长任务运行期间 `/stat` 不等待普通队列即可返回当前任务状态。
-- 归档：`docs/task-archive/T0013-2026-05-12-remove-message-heartbeat-timeout.md`
-- 当前观察项：heartbeat 和 idle timeout notify 已移除；若长任务无进展，机器人不再主动提示。用户仍可通过 `/stat`、`/stop`、`/new` 主动查询或干预。per-chat 队列、active progress 和状态格式化仍集中在 `message.handler`，适合作为下一步独立收敛任务。
+- 验证结果：passed，`npm run verify` 已在仓库根成功执行 `tsc` 和全部 `tests/*.test.ts`。
+- 归档：`docs/task-archive/T0014-2026-05-12-control-routing-immediate.md`
+- 当前观察项：控制命令和菜单数字选择已从普通 FIFO 队列剥离；`message.handler` 仍保留队列、active progress 和媒体 materialization，适合作为下一步独立收敛任务。
 
 ## 下一任务
 
 - 独立任务：继续收敛 Feishu 消息处理 Module。
   - Files：`src/handlers/message.handler.ts`、`src/bot/chat-manager.ts`
-  - Problem：Feishu message intake 同时承担消息解析、权限、自动绑定、菜单、命令路由、队列、active progress 和回复投递；Interface 虽小，但 Implementation 中的状态和顺序知识仍过度集中。
+  - Problem：Feishu message intake 同时承担消息解析、权限、自动绑定、队列、active progress 和回复投递；Interface 虽小，但 Implementation 中的状态和顺序知识仍过度集中。
   - Solution：继续提取 per-chat 队列和 active status Module，提升 Locality 并让测试围绕更稳定的 seams 编写。
 - 独立任务：深挖 Codex app-server 会话状态机。
   - Files：`src/codex-minimal/session.ts`、`src/codex-minimal/app-server-rpc.ts`、`src/codex-minimal/app-server-process.ts`
