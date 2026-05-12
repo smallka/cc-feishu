@@ -24,19 +24,15 @@ import {
   type MessageEvent,
   type ParsedMessageTask,
 } from './message-intake';
+import {
+  materializeQueuedTask,
+  type QueuedMessageTask,
+} from './message-media-materialization';
 
 const processedMessages = new Set<string>();
 const MAX_CACHE_SIZE = 500;
 let acceptingMessages = true;
 const MESSAGE_IDLE_TIMEOUT_MS = 300000;
-
-interface QueuedMessageTask {
-  data: MessageEvent;
-  text: string;
-  messageType: string;
-  imagePaths?: string[];
-  enqueuedAt: number;
-}
 
 interface MessageProcessingOptions {
   onActivity?: (event?: ActivityEvent) => void;
@@ -386,111 +382,5 @@ async function handleQueuedWorkload(
       duration,
       threshold: MESSAGE_IDLE_TIMEOUT_MS * 0.5,
     });
-  }
-}
-
-async function materializeQueuedTask(task: ParsedMessageTask): Promise<QueuedMessageTask | null> {
-  if (task.messageType === 'text') {
-    return {
-      data: task.data,
-      text: task.text,
-      messageType: task.messageType,
-      enqueuedAt: Date.now(),
-    };
-  }
-
-  if (task.messageType === 'image') {
-    return materializeImageTask(task);
-  }
-
-  if (task.messageType === 'file') {
-    return materializeFileTask(task);
-  }
-
-  return null;
-}
-
-async function materializeImageTask(task: ParsedMessageTask): Promise<QueuedMessageTask | null> {
-  const { message } = task.data;
-  const chatId = message.chat_id;
-  const imageKey = task.imageKey;
-
-  if (chatManager.getProvider(chatId) !== 'codex') {
-    await messageService.sendTextMessage(chatId, '当前仅 Codex 支持图片消息，请先使用 /agent 切换到 Codex。');
-    return null;
-  }
-
-  if (!imageKey) {
-    logger.warn('Skipping image message without image key', {
-      messageId: message.message_id,
-      chatId,
-    });
-    return null;
-  }
-
-  try {
-    const imagePath = await messageService.downloadMessageImage(message.message_id, imageKey);
-    return {
-      data: task.data,
-      text: task.text,
-      messageType: task.messageType,
-      imagePaths: [imagePath],
-      enqueuedAt: Date.now(),
-    };
-  } catch (error) {
-    logger.error('Failed to download image message resource', {
-      messageId: message.message_id,
-      chatId,
-      imageKey,
-      error,
-    });
-    await messageService.sendTextMessage(chatId, '图片下载失败，请稍后重试。');
-    return null;
-  }
-}
-
-async function materializeFileTask(task: ParsedMessageTask): Promise<QueuedMessageTask | null> {
-  const { message } = task.data;
-  const chatId = message.chat_id;
-  const fileKey = task.fileKey;
-  const fileName = task.fileName;
-
-  if (chatManager.getProvider(chatId) !== 'codex') {
-    await messageService.sendTextMessage(chatId, '当前仅 Codex 支持文件消息，请先使用 /agent 切换到 Codex。');
-    return null;
-  }
-
-  if (!fileKey) {
-    logger.warn('Skipping file message without file key', {
-      messageId: message.message_id,
-      chatId,
-    });
-    return null;
-  }
-
-  try {
-    const filePath = await messageService.downloadMessageFile(message.message_id, fileKey, fileName);
-    const prompt = [
-      `用户发送了一个文件${fileName ? `：${fileName}` : ''}。`,
-      `文件已保存到本地路径：${filePath}`,
-      '请先读取该文件，再继续处理当前请求。',
-    ].join('\n');
-
-    return {
-      data: task.data,
-      text: prompt,
-      messageType: task.messageType,
-      enqueuedAt: Date.now(),
-    };
-  } catch (error) {
-    logger.error('Failed to download file message resource', {
-      messageId: message.message_id,
-      chatId,
-      fileKey,
-      fileName,
-      error,
-    });
-    await messageService.sendTextMessage(chatId, '文件下载失败，请稍后重试。');
-    return null;
   }
 }
