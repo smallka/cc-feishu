@@ -5,24 +5,24 @@
 - 当前阶段：TypeScript 单实现主线。
 - 当前有效基线：TypeScript 应用位于仓库根目录；Python 历史实现已删除。
 - 默认验证命令：`npm run verify`
-- 当前任务来源：用户确认继续收敛 Feishu 消息处理 Module；已把控制命令从普通 FIFO 队列中剥离，保留 agent workload 进队列。
+- 当前任务来源：用户确认继续收敛 Feishu 消息处理 Module；已提取 agent workload queue 与 active progress Module。
 
 ## 当前任务
 
 - 状态：validated
-- 任务：控制命令即时化，队列只收 agent workload。
-- scope：在保持 access gate、per-chat 串行队列、`/new` 清等待队列、`/stop` interrupt、`/stat` 主动查询和菜单选择语义不变的前提下，让 `/help`、`/agent`、`/debug`、`/cd`、`/resume`、未知 slash command 和菜单数字选择即时处理，不进入普通 FIFO 队列。
+- 任务：提取 Feishu chat workload queue 与 active progress Module。
+- scope：在保持控制命令即时处理、agent workload per-chat 串行、`/new` 清等待队列、`/stat` 可查看 active progress、shutdown drain 和跨 chat 隔离语义不变的前提下，把 `message.handler` 中的队列与 active status 状态提取到独立 Module。
 - 验证命令：`npm run verify`
 - 验证结果：passed，`npm run verify` 已在仓库根成功执行 `tsc` 和全部 `tests/*.test.ts`。
-- 归档：`docs/task-archive/T0014-2026-05-12-control-routing-immediate.md`
-- 当前观察项：控制命令和菜单数字选择已从普通 FIFO 队列剥离；`message.handler` 仍保留队列、active progress 和媒体 materialization，适合作为下一步独立收敛任务。
+- 归档：`docs/task-archive/T0015-2026-05-12-extract-workload-queue.md`
+- 当前观察项：`message.handler` 已不再直接持有 workload queue、active processor 或 active progress Map；媒体 materialization 和 access/auto-bind intake 仍在 handler 中，适合作为后续独立收敛点。
 
 ## 下一任务
 
-- 独立任务：继续收敛 Feishu 消息处理 Module。
-  - Files：`src/handlers/message.handler.ts`、`src/bot/chat-manager.ts`
-  - Problem：Feishu message intake 同时承担消息解析、权限、自动绑定、队列、active progress 和回复投递；Interface 虽小，但 Implementation 中的状态和顺序知识仍过度集中。
-  - Solution：继续提取 per-chat 队列和 active status Module，提升 Locality 并让测试围绕更稳定的 seams 编写。
+- 独立任务：收敛 Feishu message intake 与 materialization。
+  - Files：`src/handlers/message.handler.ts`、`src/services/message.service.ts`
+  - Problem：`message.handler` 仍同时承担 Feishu message content 解析、access/auto-bind、图片/文件 materialization 和 workload 入队编排；队列状态已收敛，但 intake 的顺序知识仍偏集中。
+  - Solution：提取 message intake/materialization Module，让 handler 只编排 access gate、控制命令和 workload enqueue，并补媒体下载失败、provider 不支持媒体和空内容解析测试。
 - 独立任务：深挖 Codex app-server 会话状态机。
   - Files：`src/codex-minimal/session.ts`、`src/codex-minimal/app-server-rpc.ts`、`src/codex-minimal/app-server-process.ts`
   - Problem：`CodexMinimalSession` 同时处理进程生命周期、JSON-RPC、thread start/resume、turn 状态、通知解析、最终回答提取、interrupt 和错误归因；状态转换风险集中但测试面偏重私有细节。

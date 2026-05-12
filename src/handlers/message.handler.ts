@@ -8,23 +8,20 @@ import { chatBindingStore } from '../bot/chat-binding-store';
 import { deriveChatDirectoryName } from '../bot/directory-name';
 import menuContext from '../bot/menu-context';
 import {
-  formatDuration,
   getInvalidBindingText,
   getInvalidStoredBinding,
   handleMessageCommand,
   logLongProcessing,
 } from '../bot/message-command-router';
+import { ChatWorkloadQueue } from '../bot/chat-workload-queue';
 import { isDirectoryAvailable, resolveWorkPathCandidate } from '../bot/work-directory';
-import type { ActivityEvent, ActivityPhase } from '../agent/types';
+import type { ActivityEvent } from '../agent/types';
 import chatService from '../services/chat.service';
 import messageService from '../services/message.service';
-import config, { type AgentProvider } from '../config';
+import config from '../config';
 
 const processedMessages = new Set<string>();
 const MAX_CACHE_SIZE = 500;
-const queuedMessages = new Map<string, QueuedMessageTask[]>();
-const activeProcessors = new Map<string, Promise<void>>();
-const activeTaskProgress = new Map<string, ActiveTaskProgress>();
 let acceptingMessages = true;
 const MESSAGE_IDLE_TIMEOUT_MS = 300000;
 
@@ -79,25 +76,21 @@ interface MessageProcessingOptions {
   onActivity?: (event?: ActivityEvent) => void;
 }
 
-interface ProgressState {
-  phase: ActivityPhase;
-  reason: string;
-  method?: string;
-  threadId?: string | null;
-  turnId?: string | null;
-  lastActivityAt: number;
-  activityCount: number;
-}
-
-interface ActiveTaskProgress extends ProgressState {
-  chatId: string;
-  messageId: string;
-  messageType: string;
-  provider: AgentProvider;
-  startedAt: number;
-  queueDelay: number;
-  remainingQueueDepthAtStart: number;
-}
+const workloadQueue = new ChatWorkloadQueue<QueuedMessageTask>({
+  describeTask: (task) => ({
+    chatId: task.data.message.chat_id,
+    messageId: task.data.message.message_id,
+    senderId: task.data.sender.sender_id.open_id,
+    provider: chatManager.getProvider(task.data.message.chat_id),
+    messageType: task.messageType,
+    textLength: task.text.length,
+    imageCount: task.imagePaths?.length ?? 0,
+    enqueuedAt: task.enqueuedAt,
+  }),
+  processTask: (task, context) => handleQueuedWorkload(task, context.startTime, {
+    onActivity: context.onActivity,
+  }),
+});
 
 function getUnauthorizedText(openId: string): string {
   return `当前账号无权限使用这个机器人。\n你的 open_id: ${openId}\n如需授权，请将它加入 FEISHU_ALLOWED_OPEN_IDS。`;
@@ -298,27 +291,15 @@ async function prepareMessageTask(data: MessageEvent): Promise<void> {
     return;
   }
 
-  enqueueTask(task);
-
-  logger.info('Queued incoming message', {
-    messageId: message.message_id,
-    chatId,
-    senderId: sender.sender_id.open_id,
-    provider: chatManager.getProvider(chatId),
-    messageType: task.messageType,
-    textLength: task.text.length,
-    imageCount: task.imagePaths?.length ?? 0,
-    queueDepth: getChatQueueLength(chatId),
-  });
+  workloadQueue.enqueue(task);
 }
 
 export async function stopMessageHandling(): Promise<void> {
   acceptingMessages = false;
   logger.info('Stopping message handler', {
-    activeChats: activeProcessors.size,
-    queuedMessages: getTotalQueuedMessages(),
+    queuedMessages: workloadQueue.getTotalQueuedMessages(),
   });
-  await Promise.all(Array.from(activeProcessors.values()));
+  await workloadQueue.stop();
   logger.info('Message handler stopped');
 }
 
@@ -339,7 +320,7 @@ async function handleImmediateStop(chatId: string): Promise<void> {
 
 async function handleImmediateReset(chatId: string): Promise<void> {
   menuContext.clear(chatId);
-  const droppedCount = clearQueuedMessages(chatId);
+  const droppedCount = workloadQueue.clear(chatId);
   await chatManager.interrupt(chatId).catch(() => 'error');
   const invalidBinding = getInvalidStoredBinding(chatId);
   const cwd = await chatManager.reset(chatId);
@@ -358,7 +339,7 @@ async function handleImmediateStatus(task: ParsedMessageTask): Promise<void> {
     messageType: task.messageType,
     message: task.data.message,
   }, {
-    getActiveTaskStatus,
+    getActiveTaskStatus: chatId => workloadQueue.getActiveTaskStatus(chatId),
   });
 }
 
@@ -391,7 +372,7 @@ async function handleControlMessage(task: ParsedMessageTask): Promise<boolean> {
     messageType: task.messageType,
     message: task.data.message,
   }, {
-    getActiveTaskStatus,
+    getActiveTaskStatus: chatId => workloadQueue.getActiveTaskStatus(chatId),
   });
 
   return handled.kind === 'command';
@@ -407,199 +388,7 @@ function rememberProcessedMessage(messageId: string): void {
   }
 }
 
-function enqueueTask(task: QueuedMessageTask): void {
-  const chatId = task.data.message.chat_id;
-  const queue = queuedMessages.get(chatId) ?? [];
-  queue.push(task);
-  queuedMessages.set(chatId, queue);
-  scheduleChatProcessor(chatId);
-}
-
-function scheduleChatProcessor(chatId: string): void {
-  if (activeProcessors.has(chatId)) {
-    return;
-  }
-
-  const processor = processChatQueue(chatId).finally(() => {
-    activeProcessors.delete(chatId);
-    if (hasQueuedMessages(chatId)) {
-      scheduleChatProcessor(chatId);
-    }
-  });
-
-  activeProcessors.set(chatId, processor);
-}
-
-async function processChatQueue(chatId: string): Promise<void> {
-  while (true) {
-    const task = dequeueTask(chatId);
-    if (!task) {
-      return;
-    }
-
-    await processQueuedMessage(task);
-  }
-}
-
-function dequeueTask(chatId: string): QueuedMessageTask | undefined {
-  const queue = queuedMessages.get(chatId);
-  if (!queue || queue.length === 0) {
-    queuedMessages.delete(chatId);
-    return undefined;
-  }
-
-  const task = queue.shift();
-  if (!queue.length) {
-    queuedMessages.delete(chatId);
-  }
-  return task;
-}
-
-function hasQueuedMessages(chatId: string): boolean {
-  return (queuedMessages.get(chatId)?.length ?? 0) > 0;
-}
-
-function clearQueuedMessages(chatId: string): number {
-  const queue = queuedMessages.get(chatId);
-  if (!queue?.length) {
-    queuedMessages.delete(chatId);
-    return 0;
-  }
-
-  const droppedCount = queue.length;
-  queuedMessages.delete(chatId);
-  return droppedCount;
-}
-
-function getChatQueueLength(chatId: string): number {
-  return queuedMessages.get(chatId)?.length ?? 0;
-}
-
-function getTotalQueuedMessages(): number {
-  let total = 0;
-  for (const queue of queuedMessages.values()) {
-    total += queue.length;
-  }
-  return total;
-}
-
-function getActiveTaskStatus(chatId: string): string | null {
-  const progress = activeTaskProgress.get(chatId);
-  if (!progress) {
-    return null;
-  }
-
-  const now = Date.now();
-  const runningDuration = formatDuration((now - progress.startedAt) / 1000);
-  const idleDuration = formatDuration((now - progress.lastActivityAt) / 1000);
-  const lines = [
-    '',
-    '当前任务:',
-    `- 状态: 运行中`,
-    `- 消息类型: ${progress.messageType}`,
-    `- 已运行: ${runningDuration}`,
-    `- 最近无新进展: ${idleDuration}`,
-    `- 当前阶段: ${formatActivityPhase(progress.phase)}`,
-    `- 最近进展: ${progress.reason}`,
-    `- 进展次数: ${progress.activityCount}`,
-    `- 当前排队: ${getChatQueueLength(chatId)} 条`,
-  ];
-
-  if (progress.method) {
-    lines.push(`- 最近事件: ${progress.method}`);
-  }
-  if (progress.turnId) {
-    lines.push(`- Turn: ${progress.turnId.slice(0, 8)}...`);
-  }
-
-  return lines.join('\n');
-}
-
-function formatActivityPhase(phase: ActivityPhase): string {
-  switch (phase) {
-    case 'received':
-      return '消息已出队';
-    case 'starting':
-      return '启动 app-server';
-    case 'ready':
-      return '会话已就绪';
-    case 'turn_starting':
-      return '正在启动 turn';
-    case 'turn_running':
-      return 'turn 运行中';
-    case 'turn_finishing':
-      return 'turn 收尾中';
-    case 'sending_response':
-      return '发送回复';
-    case 'cleanup':
-      return '清理状态';
-    default:
-      return phase;
-  }
-}
-
-async function processQueuedMessage(task: QueuedMessageTask): Promise<void> {
-  const { data } = task;
-  const { sender, message } = data;
-  const startTime = Date.now();
-  const queueDelay = startTime - task.enqueuedAt;
-  const remainingQueueDepthAtStart = getChatQueueLength(message.chat_id);
-  const progress: ActiveTaskProgress = {
-    chatId: message.chat_id,
-    messageId: message.message_id,
-    messageType: task.messageType,
-    provider: chatManager.getProvider(message.chat_id),
-    startedAt: startTime,
-    queueDelay,
-    remainingQueueDepthAtStart,
-    phase: 'received',
-    reason: 'message dequeued',
-    lastActivityAt: startTime,
-    activityCount: 0,
-  };
-
-  logger.info('Processing queued message', {
-    messageId: message.message_id,
-    chatId: message.chat_id,
-    senderId: sender.sender_id.open_id,
-    provider: chatManager.getProvider(message.chat_id),
-    messageType: task.messageType,
-    queueDelay,
-    imageCount: task.imagePaths?.length ?? 0,
-    remainingQueueDepth: remainingQueueDepthAtStart,
-  });
-
-  const markActivity = (event?: ActivityEvent) => {
-    progress.lastActivityAt = Date.now();
-    progress.activityCount += 1;
-    if (event) {
-      progress.phase = event.phase;
-      progress.reason = event.reason;
-      progress.method = event.method;
-      progress.threadId = event.threadId;
-      progress.turnId = event.turnId;
-    }
-  };
-
-  activeTaskProgress.set(message.chat_id, progress);
-  try {
-    await handleMessageInternal(task, startTime, { onActivity: markActivity });
-  } catch (error) {
-    const duration = Date.now() - startTime;
-    logger.error('Error handling queued message event', {
-      messageId: message.message_id,
-      chatId: message.chat_id,
-      duration,
-      error,
-    });
-  } finally {
-    if (activeTaskProgress.get(message.chat_id) === progress) {
-      activeTaskProgress.delete(message.chat_id);
-    }
-  }
-}
-
-async function handleMessageInternal(
+async function handleQueuedWorkload(
   task: QueuedMessageTask,
   startTime: number,
   options?: MessageProcessingOptions,
@@ -619,7 +408,7 @@ async function handleMessageInternal(
   });
 
   const result = await handleMessageCommand({ ...task, message }, {
-    getActiveTaskStatus,
+    getActiveTaskStatus: chatId => workloadQueue.getActiveTaskStatus(chatId),
     onActivity: options?.onActivity,
   });
 
