@@ -10,12 +10,12 @@
 ## 当前任务
 
 - 状态：validated
-- 任务：为 Codex Agent 增加空闲自动回收。
-- scope：在不改变消息队列、权限、目录绑定和 Codex app-server turn 状态机行为的前提下，避免每个活跃过的 chat 永久持有一个后台 `codex app-server` 进程。
+- 任务：按作息日和简单意图规则选择是否延续会话。
+- scope：在不启动或重启现有 PM2/生产进程的前提下，为普通消息进入 Agent 前增加本地会话选择规则：同作息日默认延续；跨作息日默认新开，除非文本明确表达继续；明确新开意图始终新开；每次选择都向用户说明。
 - 验证命令：`npm run verify`
-- 验证结果：passed，`npm run verify` 已在仓库根成功执行 `tsc` 和全部 `tests/*.test.ts`；新增 `chat-manager-idle-reclaim.test.ts` 覆盖 Codex idle reclaim、运行中延迟回收、重复消息取消旧 timer、恢复 session，以及 Claude provider 不启用 idle reclaim。
-- 归档：`docs/task-archive/T0018-2026-05-15-codex-agent-idle-reclaim.md`
-- 当前观察项：PM2 进程正常；本次排查时 `cc-feishu-ts` pid `3836` 在线 2D、重启 0 次，但其下已有 7 组 `codex app-server` 根进程链。修复后新代码会在 Codex Agent 空闲 30 分钟后回收 app-server，并保留 session id 供下次消息 resume；现有 PM2 进程需重启后才会加载新代码。
+- 验证结果：passed，`npm run verify` 已在仓库根成功执行 `tsc` 和全部 `tests/*.test.ts`；新增 `session-decision.test.ts` 覆盖作息日换日线、继续/新开意图和无可延续会话兜底，新增 `chat-manager-session-decision.test.ts` 覆盖 ChatManager 的实际 resume/new session 选择与提示。
+- 归档：`docs/task-archive/T0019-2026-05-15-workday-session-decision.md`
+- 当前观察项：用户确认不引入 agent 判断；规则按作息日执行，默认本地 05:00 换日，可用 `AGENT_SESSION_DAY_CUTOFF_HOUR` 调整。本任务未启动 testbot，未重启/清理/影响正在跑的生产 PM2 或 Codex 进程。
 
 ## 下一任务
 

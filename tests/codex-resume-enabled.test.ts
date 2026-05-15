@@ -111,6 +111,7 @@ async function main(): Promise<void> {
       const manager = new ChatManager({
         defaultCwd: 'C:\\work',
         defaultProvider: 'codex',
+        sessionDecisionNotifier: async () => undefined,
         agentFactory: (options) => {
           capturedOptions.push(options);
           return createFakeAgent() as any;
@@ -135,6 +136,7 @@ async function main(): Promise<void> {
       const manager = new ChatManager({
         defaultCwd: 'C:\\work',
         defaultProvider: 'claude',
+        sessionDecisionNotifier: async () => undefined,
         agentFactory: (options) => {
           capturedOptions.push(options);
           return createFakeAgent() as any;

@@ -94,6 +94,7 @@ function createHarness(defaultProvider: 'claude' | 'codex' = 'codex') {
     defaultProvider,
     agentIdleTtlMs: 30_000,
     now: () => nowMs,
+    sessionDecisionNotifier: async () => undefined,
     setTimeoutFn: (callback, delayMs) => {
       const entry = { callback, delayMs, cleared: false };
       timers.push(entry);

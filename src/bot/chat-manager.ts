@@ -16,6 +16,11 @@ import {
 } from '../codex/session-scanner';
 import config from '../config';
 import { chatBindingStore, type ChatBindingStore } from './chat-binding-store';
+import {
+  decideSession,
+  formatSessionDecisionNotice,
+  type SessionDecision,
+} from './session-decision';
 
 interface ChatData {
   cwd: string;
@@ -28,6 +33,7 @@ interface ChatData {
 
 type AgentFactory = (options: CreateAgentOptions) => ChatAgent;
 type TimeoutHandle = ReturnType<typeof setTimeout>;
+type SessionDecisionNotifier = (chatId: string, text: string) => Promise<void>;
 
 interface ChatManagerOptions {
   bindingStore?: ChatBindingStore;
@@ -38,6 +44,8 @@ interface ChatManagerOptions {
   now?: () => number;
   setTimeoutFn?: (callback: () => void, delayMs: number) => TimeoutHandle;
   clearTimeoutFn?: (handle: TimeoutHandle) => void;
+  sessionDayCutoffHour?: number;
+  sessionDecisionNotifier?: SessionDecisionNotifier;
 }
 
 function formatDuration(seconds: number): string {
@@ -72,6 +80,8 @@ export class ChatManager {
   private readonly now: () => number;
   private readonly setTimeoutFn: (callback: () => void, delayMs: number) => TimeoutHandle;
   private readonly clearTimeoutFn: (handle: TimeoutHandle) => void;
+  private readonly sessionDayCutoffHour: number;
+  private readonly sessionDecisionNotifier: SessionDecisionNotifier;
   private readonly idleTimers = new Map<string, TimeoutHandle>();
 
   constructor(options: ChatManagerOptions = {}) {
@@ -83,6 +93,9 @@ export class ChatManager {
     this.now = options.now ?? (() => Date.now());
     this.setTimeoutFn = options.setTimeoutFn ?? setTimeout;
     this.clearTimeoutFn = options.clearTimeoutFn ?? clearTimeout;
+    this.sessionDayCutoffHour = options.sessionDayCutoffHour ?? config.agent.sessionDayCutoffHour;
+    this.sessionDecisionNotifier = options.sessionDecisionNotifier
+      ?? ((chatId, text) => messageService.sendTextMessage(chatId, text));
     this.startTime = this.now();
   }
 
@@ -90,6 +103,7 @@ export class ChatManager {
     logger.info('[ChatManager] Started', {
       provider: this.defaultProvider,
       agentIdleTtlMs: this.agentIdleTtlMs,
+      sessionDayCutoffHour: this.sessionDayCutoffHour,
     });
   }
 
@@ -110,6 +124,7 @@ export class ChatManager {
   }
 
   async sendMessage(chatId: string, text: string, options?: SendMessageOptions): Promise<void> {
+    const sessionDecision = await this.applySessionDecision(chatId, text);
     const provider = this.getChatProvider(chatId);
     const agent = this.getOrCreateAgent(chatId);
     this.cancelIdleTimer(chatId);
@@ -119,6 +134,7 @@ export class ChatManager {
       provider,
       agentId: agent.getAgentId(),
       sessionId: agent.getSessionId(),
+      sessionDecision,
       messageLength: text.length,
       messageText: text,
     });
@@ -364,6 +380,7 @@ export class ChatManager {
       provider,
       sessionId: target.sessionId,
       sessionNotified: false,
+      lastActiveAt: this.now(),
     });
 
     logger.info('[ChatManager] Resumed session', {
@@ -632,6 +649,59 @@ export class ChatManager {
       });
     }
     this.agents.delete(chatId);
+  }
+
+  private async applySessionDecision(chatId: string, text: string): Promise<SessionDecision> {
+    const currentData = this.chats.get(chatId);
+    const currentAgent = this.agents.get(chatId);
+    const hasKnownSession = !!currentData?.sessionId || !!currentAgent?.isAlive();
+    const previousAtMs = hasKnownSession
+      ? currentData?.lastActiveAt ?? currentAgent?.getStartTime() ?? this.now()
+      : undefined;
+    const decision = decideSession({
+      previousAtMs,
+      currentAtMs: this.now(),
+      text,
+      workdayCutoffHour: this.sessionDayCutoffHour,
+    });
+
+    if (decision.mode === 'new') {
+      await this.prepareNewSession(chatId, currentData);
+    }
+
+    await this.notifySessionDecision(chatId, decision);
+    return decision;
+  }
+
+  private async prepareNewSession(chatId: string, currentData: ChatData | undefined): Promise<void> {
+    await this.destroyAgent(chatId, 'starting new session by session decision');
+
+    const latestData = this.chats.get(chatId) ?? currentData;
+    const cwd = latestData?.cwd ?? this.getStoredCwd(chatId) ?? this.defaultCwd;
+    const provider = latestData?.provider ?? this.defaultProvider;
+
+    this.chats.set(chatId, {
+      ...latestData,
+      cwd,
+      provider,
+      sessionId: undefined,
+      sessionNotified: false,
+      idleReclaimedAt: undefined,
+      lastActiveAt: latestData?.lastActiveAt,
+    });
+  }
+
+  private async notifySessionDecision(chatId: string, decision: SessionDecision): Promise<void> {
+    const text = formatSessionDecisionNotice(decision);
+    try {
+      await this.sessionDecisionNotifier(chatId, text);
+    } catch (error: any) {
+      logger.warn('[ChatManager] Failed to notify session decision', {
+        chatId,
+        decision,
+        error: error.message,
+      });
+    }
   }
 
   private touchChat(chatId: string, agent: ChatAgent): void {

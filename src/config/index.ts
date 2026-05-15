@@ -15,6 +15,7 @@ interface Config {
     provider: AgentProvider;
     workRoot: string;
     idleTtlMs: number;
+    sessionDayCutoffHour: number;
   };
   claude: {
     model: string;
@@ -82,6 +83,17 @@ function parsePort(name: string, fallback: number): number {
   return parsed;
 }
 
+function parseHour(name: string, fallback: number): number {
+  const rawValue = (process.env[name] || `${fallback}`).trim();
+  const parsed = Number.parseInt(rawValue, 10);
+
+  if (!Number.isInteger(parsed) || parsed < 0 || parsed > 23) {
+    throw new Error(`Invalid ${name}: ${rawValue}`);
+  }
+
+  return parsed;
+}
+
 function parseCsvList(rawValue: string | undefined): string[] {
   return (rawValue || '')
     .split(',')
@@ -128,6 +140,7 @@ const config: Config = {
     provider: resolveAgentProvider(),
     workRoot: resolveAgentWorkRoot(),
     idleTtlMs: parsePositiveInt('AGENT_IDLE_TTL_MS', 30 * 60 * 1000),
+    sessionDayCutoffHour: parseHour('AGENT_SESSION_DAY_CUTOFF_HOUR', 5),
   },
   claude: {
     model: process.env.CLAUDE_MODEL || 'claude-opus-4-6',

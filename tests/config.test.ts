@@ -51,10 +51,12 @@ async function main(): Promise<void> {
         CLAUDE_WORK_ROOT: 'C:\\work\\legacy-root',
         CHAT_BINDINGS_FILE: undefined,
         AGENT_IDLE_TTL_MS: undefined,
+        AGENT_SESSION_DAY_CUTOFF_HOUR: undefined,
       }, () => {
         const config = loadConfig();
         assert.equal((config as any).agent.workRoot, 'C:\\work\\preferred-root');
         assert.equal((config as any).agent.idleTtlMs, 30 * 60 * 1000);
+        assert.equal((config as any).agent.sessionDayCutoffHour, 5);
       });
 
       withEnv({
@@ -68,9 +70,11 @@ async function main(): Promise<void> {
 
       withEnv({
         AGENT_IDLE_TTL_MS: '60000',
+        AGENT_SESSION_DAY_CUTOFF_HOUR: '4',
       }, () => {
         const config = loadConfig();
         assert.equal((config as any).agent.idleTtlMs, 60_000);
+        assert.equal((config as any).agent.sessionDayCutoffHour, 4);
       });
 
       process.chdir(sandboxRoot);

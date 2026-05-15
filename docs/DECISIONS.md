@@ -52,3 +52,11 @@
 - Evidence：见 `docs/task-archive/T0018-2026-05-15-codex-agent-idle-reclaim.md`。
 - Consequences：空闲 chat 不再长期占用 Codex app-server；首次恢复消息会重新启动 Codex Agent，并依赖已有 session id resume。
 - Revisit when：Codex app-server 支持更轻量的长期复用池、实时进程指标显示，或用户需要 Claude provider 也采用同类回收策略。
+
+### 2026-05-15 - 用作息日和简单规则选择会话延续
+
+- Decision：普通消息进入 Agent 前使用纯规则选择会话：同作息日默认延续；跨作息日默认新开；明确继续则延续；明确新开则新开；每次选择都向用户说明。作息日默认以本地 `05:00` 为换日线，可通过 `AGENT_SESSION_DAY_CUTOFF_HOUR` 调整。
+- Rationale：用户明确不希望引入额外 agent 判断意图，并希望按作息日而非自然日判断跨天，避免凌晨连续对话被切到新会话。
+- Evidence：见 `docs/task-archive/T0019-2026-05-15-workday-session-decision.md`。
+- Consequences：会话选择可解释且可测试；跨作息日的模糊消息会新开会话，避免旧上下文误续；高风险操作仍应由命令/确认流约束，不仅依赖会话选择。
+- Revisit when：简单规则误判积累到需要新增模式，或需要把会话状态从内存持久化到存储。
