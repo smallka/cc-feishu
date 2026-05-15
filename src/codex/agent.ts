@@ -181,6 +181,10 @@ export class CodexAgent implements ChatAgent {
     return !this.destroyed;
   }
 
+  isRunning(): boolean {
+    return this.session.isRunning();
+  }
+
   onResponse(callback: OnResponseCallback): void {
     this.onResponseCallback = callback;
   }

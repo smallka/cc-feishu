@@ -14,6 +14,7 @@ interface Config {
   agent: {
     provider: AgentProvider;
     workRoot: string;
+    idleTtlMs: number;
   };
   claude: {
     model: string;
@@ -126,6 +127,7 @@ const config: Config = {
   agent: {
     provider: resolveAgentProvider(),
     workRoot: resolveAgentWorkRoot(),
+    idleTtlMs: parsePositiveInt('AGENT_IDLE_TTL_MS', 30 * 60 * 1000),
   },
   claude: {
     model: process.env.CLAUDE_MODEL || 'claude-opus-4-6',

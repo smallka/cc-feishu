@@ -22,15 +22,22 @@ interface ChatData {
   provider: AgentProvider;
   sessionId: string | undefined;
   sessionNotified?: boolean;
+  lastActiveAt?: number;
+  idleReclaimedAt?: number;
 }
 
 type AgentFactory = (options: CreateAgentOptions) => ChatAgent;
+type TimeoutHandle = ReturnType<typeof setTimeout>;
 
 interface ChatManagerOptions {
   bindingStore?: ChatBindingStore;
   defaultCwd?: string;
   defaultProvider?: AgentProvider;
   agentFactory?: AgentFactory;
+  agentIdleTtlMs?: number;
+  now?: () => number;
+  setTimeoutFn?: (callback: () => void, delayMs: number) => TimeoutHandle;
+  clearTimeoutFn?: (handle: TimeoutHandle) => void;
 }
 
 function formatDuration(seconds: number): string {
@@ -61,17 +68,29 @@ export class ChatManager {
   private readonly defaultProvider: AgentProvider;
   private readonly agentFactory: AgentFactory;
   private readonly startTime: number;
+  private readonly agentIdleTtlMs: number;
+  private readonly now: () => number;
+  private readonly setTimeoutFn: (callback: () => void, delayMs: number) => TimeoutHandle;
+  private readonly clearTimeoutFn: (handle: TimeoutHandle) => void;
+  private readonly idleTimers = new Map<string, TimeoutHandle>();
 
   constructor(options: ChatManagerOptions = {}) {
     this.bindingStore = options.bindingStore ?? chatBindingStore;
     this.defaultCwd = options.defaultCwd ?? config.agent.workRoot;
     this.defaultProvider = options.defaultProvider ?? config.agent.provider;
     this.agentFactory = options.agentFactory ?? createAgent;
-    this.startTime = Date.now();
+    this.agentIdleTtlMs = options.agentIdleTtlMs ?? config.agent.idleTtlMs;
+    this.now = options.now ?? (() => Date.now());
+    this.setTimeoutFn = options.setTimeoutFn ?? setTimeout;
+    this.clearTimeoutFn = options.clearTimeoutFn ?? clearTimeout;
+    this.startTime = this.now();
   }
 
   async start(): Promise<void> {
-    logger.info('[ChatManager] Started', { provider: this.defaultProvider });
+    logger.info('[ChatManager] Started', {
+      provider: this.defaultProvider,
+      agentIdleTtlMs: this.agentIdleTtlMs,
+    });
   }
 
   getProvider(chatId?: string): AgentProvider {
@@ -93,6 +112,8 @@ export class ChatManager {
   async sendMessage(chatId: string, text: string, options?: SendMessageOptions): Promise<void> {
     const provider = this.getChatProvider(chatId);
     const agent = this.getOrCreateAgent(chatId);
+    this.cancelIdleTimer(chatId);
+    this.touchChat(chatId, agent);
     logger.info('[ChatManager] Sending message', {
       chatId,
       provider,
@@ -101,7 +122,12 @@ export class ChatManager {
       messageLength: text.length,
       messageText: text,
     });
-    await agent.sendMessage(text, options);
+    try {
+      await agent.sendMessage(text, options);
+    } finally {
+      this.touchChat(chatId, agent);
+      this.scheduleIdleReclaim(chatId, agent);
+    }
   }
 
   async interrupt(chatId: string): Promise<'success' | 'timeout' | 'no_session' | 'error'> {
@@ -139,7 +165,13 @@ export class ChatManager {
 
     await this.destroyAgent(chatId, 'switching cwd');
     this.bindingStore.set(chatId, newCwd);
-    this.chats.set(chatId, { cwd: newCwd, provider, sessionId: undefined, sessionNotified: false });
+    this.chats.set(chatId, {
+      cwd: newCwd,
+      provider,
+      sessionId: undefined,
+      sessionNotified: false,
+      lastActiveAt: this.now(),
+    });
     logger.info('[ChatManager] Switched cwd', { chatId, oldCwd: currentCwd, newCwd, provider });
   }
 
@@ -159,6 +191,7 @@ export class ChatManager {
       provider,
       sessionId: undefined,
       sessionNotified: false,
+      lastActiveAt: this.now(),
     });
     logger.info('[ChatManager] Switched provider', {
       chatId,
@@ -174,7 +207,13 @@ export class ChatManager {
 
     const cwd = this.getChatCwd(chatId);
     const provider = this.getChatProvider(chatId);
-    this.chats.set(chatId, { cwd, provider, sessionId: undefined, sessionNotified: false });
+    this.chats.set(chatId, {
+      cwd,
+      provider,
+      sessionId: undefined,
+      sessionNotified: false,
+      lastActiveAt: this.now(),
+    });
     logger.info('[ChatManager] Session reset', { chatId, cwd, provider });
     return cwd;
   }
@@ -191,15 +230,26 @@ export class ChatManager {
 
     const sessionId = agent.getSessionId() || '无';
     const cwd = agent.getCwd();
-    const uptime = (Date.now() - agent.getStartTime()) / 1000;
+    const uptime = (this.now() - agent.getStartTime()) / 1000;
+    const lastActiveAt = data?.lastActiveAt ?? agent.getStartTime();
+    const idleFor = (this.now() - lastActiveAt) / 1000;
 
-    return [
+    const lines = [
       '会话信息:',
       `- Provider: ${provider}`,
       `- Session ID: ${sessionId === '无' ? sessionId : `${sessionId.slice(0, 16)}...`}`,
       `- 工作目录: ${cwd}`,
       `- 运行时长: ${formatDuration(uptime)}`,
-    ].join('\n');
+    ];
+
+    if (provider === 'codex') {
+      lines.push(
+        `- 空闲时长: ${formatDuration(idleFor)}`,
+        `- 空闲回收: ${formatDuration(this.agentIdleTtlMs / 1000)}`,
+      );
+    }
+
+    return lines.join('\n');
   }
 
   listSessions(chatId: string): string {
@@ -326,7 +376,7 @@ export class ChatManager {
   }
 
   getDebugInfo(): string {
-    const uptime = (Date.now() - this.startTime) / 1000;
+    const uptime = (this.now() - this.startTime) / 1000;
     const info = [
       '**系统状态**',
       `- 默认 Provider: ${this.defaultProvider}`,
@@ -353,21 +403,31 @@ export class ChatManager {
         const agentId = agent.getAgentId();
         const agentIdShort = agentId.length > 12 ? `${agentId.slice(0, 12)}...` : agentId;
         const status = agent.isInitialized() ? '空闲' : '未连接';
+        const lastActiveAt = data.lastActiveAt ?? agent.getStartTime();
+        const idleFor = (this.now() - lastActiveAt) / 1000;
+        const idleLine = provider === 'codex'
+          ? `  - Idle: ${formatDuration(idleFor)} / ${formatDuration(this.agentIdleTtlMs / 1000)}\n`
+          : '';
 
         info.push(
           `- Chat: \`${chatId.slice(0, 8)}...\`\n`
           + `  - Agent: ${status} \`${agentIdShort}\`\n`
+          + idleLine
           + `  - Provider: ${provider}\n`
           + `  - Session: \`${sessionId}\`\n`
           + `  - CWD: \`${data.cwd}\``,
         );
       } else {
+        const reclaimText = data.idleReclaimedAt
+          ? `\n  - 上次空闲回收: ${formatDuration((this.now() - data.idleReclaimedAt) / 1000)}前`
+          : '';
         info.push(
           `- Chat: \`${chatId.slice(0, 8)}...\`\n`
           + '  - Agent: 未启动\n'
           + `  - Provider: ${provider}\n`
           + `  - Session: \`${sessionId}\`\n`
-          + `  - CWD: \`${data.cwd}\``,
+          + `  - CWD: \`${data.cwd}\``
+          + reclaimText,
         );
       }
     }
@@ -376,6 +436,9 @@ export class ChatManager {
   }
 
   async stop(): Promise<void> {
+    for (const chatId of this.idleTimers.keys()) {
+      this.cancelIdleTimer(chatId);
+    }
     for (const agent of this.agents.values()) {
       await agent.destroy();
     }
@@ -456,6 +519,7 @@ export class ChatManager {
           ...currentData,
           sessionNotified: true,
           sessionId: actualSessionId,
+          lastActiveAt: this.now(),
         });
       }
 
@@ -474,7 +538,13 @@ export class ChatManager {
       messageService.sendTextMessage(chatId, `错误: ${error.message}`).catch(() => {});
     });
 
-    this.chats.set(chatId, { cwd, provider, sessionId: agent.getSessionId(), sessionNotified: false });
+    this.chats.set(chatId, {
+      cwd,
+      provider,
+      sessionId: agent.getSessionId(),
+      sessionNotified: false,
+      lastActiveAt: this.now(),
+    });
     return agent;
   }
 
@@ -514,7 +584,7 @@ export class ChatManager {
 
   private formatSessionLine(index: number, session: SessionSummary, currentSession?: string): string {
     const marker = session.sessionId === currentSession ? ' 当前' : '';
-    const age = formatDuration((Date.now() - session.mtimeMs) / 1000);
+    const age = formatDuration((this.now() - session.mtimeMs) / 1000);
     return `**${index}.** \`${session.sessionId.slice(0, 8)}...\`${marker}  ${age}前`;
   }
 
@@ -546,6 +616,7 @@ export class ChatManager {
   }
 
   private async destroyAgent(chatId: string, reason: string): Promise<void> {
+    this.cancelIdleTimer(chatId);
     const agent = this.agents.get(chatId);
     if (!agent) {
       return;
@@ -561,6 +632,99 @@ export class ChatManager {
       });
     }
     this.agents.delete(chatId);
+  }
+
+  private touchChat(chatId: string, agent: ChatAgent): void {
+    const currentData = this.chats.get(chatId);
+    const cwd = currentData?.cwd ?? agent.getCwd();
+    const provider = currentData?.provider ?? this.getChatProvider(chatId);
+    const sessionId = agent.getSessionId() ?? currentData?.sessionId;
+
+    this.chats.set(chatId, {
+      ...currentData,
+      cwd,
+      provider,
+      sessionId,
+      lastActiveAt: this.now(),
+    });
+  }
+
+  private scheduleIdleReclaim(chatId: string, agent: ChatAgent): void {
+    this.cancelIdleTimer(chatId);
+
+    if (this.getChatProvider(chatId) !== 'codex' || this.agentIdleTtlMs <= 0 || !agent.isAlive()) {
+      return;
+    }
+
+    const timer = this.setTimeoutFn(() => {
+      void this.reclaimIdleAgent(chatId, agent);
+    }, this.agentIdleTtlMs);
+    if (typeof (timer as { unref?: () => unknown }).unref === 'function') {
+      (timer as { unref: () => unknown }).unref();
+    }
+    this.idleTimers.set(chatId, timer);
+  }
+
+  private cancelIdleTimer(chatId: string): void {
+    const timer = this.idleTimers.get(chatId);
+    if (!timer) {
+      return;
+    }
+
+    this.clearTimeoutFn(timer);
+    this.idleTimers.delete(chatId);
+  }
+
+  private async reclaimIdleAgent(chatId: string, expectedAgent: ChatAgent): Promise<void> {
+    this.idleTimers.delete(chatId);
+
+    const agent = this.agents.get(chatId);
+    if (!agent || agent !== expectedAgent) {
+      return;
+    }
+
+    if (!agent.isAlive() || agent.isRunning?.()) {
+      this.scheduleIdleReclaim(chatId, agent);
+      return;
+    }
+
+    const currentData = this.chats.get(chatId);
+    const sessionId = agent.getSessionId() ?? currentData?.sessionId;
+
+    logger.info('[ChatManager] Reclaiming idle agent', {
+      chatId,
+      provider: currentData?.provider ?? this.getChatProvider(chatId),
+      agentId: agent.getAgentId(),
+      sessionId,
+      idleTtlMs: this.agentIdleTtlMs,
+    });
+
+    try {
+      await agent.destroy();
+    } catch (error: any) {
+      logger.error('[ChatManager] Error destroying idle agent', {
+        chatId,
+        provider: currentData?.provider ?? this.getChatProvider(chatId),
+        agentId: agent.getAgentId(),
+        error: error.message,
+      });
+      this.scheduleIdleReclaim(chatId, agent);
+      return;
+    }
+
+    if (this.agents.get(chatId) !== agent) {
+      return;
+    }
+
+    this.agents.delete(chatId);
+    if (currentData) {
+      this.chats.set(chatId, {
+        ...currentData,
+        sessionId,
+        lastActiveAt: this.now(),
+        idleReclaimedAt: this.now(),
+      });
+    }
   }
 }
 

@@ -10,12 +10,12 @@
 ## 当前任务
 
 - 状态：validated
-- 任务：提取 Feishu media materialization Module。
-- scope：在不改变权限、自动绑定、控制命令和 workload queue 行为的前提下，把 `message.handler` 中图片/文件 provider 支持判断、媒体下载、下载失败提示和文件 prompt 组装提取到独立 Module。
+- 任务：为 Codex Agent 增加空闲自动回收。
+- scope：在不改变消息队列、权限、目录绑定和 Codex app-server turn 状态机行为的前提下，避免每个活跃过的 chat 永久持有一个后台 `codex app-server` 进程。
 - 验证命令：`npm run verify`
-- 验证结果：passed，`npm run verify` 已在仓库根成功执行 `tsc` 和全部 `tests/*.test.ts`。
-- 归档：`docs/task-archive/T0017-2026-05-12-extract-media-materialization.md`
-- 当前观察项：`message.handler` 已把 content intake 与 media materialization 都下沉为内部 Module，当前主要职责已收敛为 access gate、控制路由与 workload enqueue。
+- 验证结果：passed，`npm run verify` 已在仓库根成功执行 `tsc` 和全部 `tests/*.test.ts`；新增 `chat-manager-idle-reclaim.test.ts` 覆盖 Codex idle reclaim、运行中延迟回收、重复消息取消旧 timer、恢复 session，以及 Claude provider 不启用 idle reclaim。
+- 归档：`docs/task-archive/T0018-2026-05-15-codex-agent-idle-reclaim.md`
+- 当前观察项：PM2 进程正常；本次排查时 `cc-feishu-ts` pid `3836` 在线 2D、重启 0 次，但其下已有 7 组 `codex app-server` 根进程链。修复后新代码会在 Codex Agent 空闲 30 分钟后回收 app-server，并保留 session id 供下次消息 resume；现有 PM2 进程需重启后才会加载新代码。
 
 ## 下一任务
 

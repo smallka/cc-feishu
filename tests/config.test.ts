@@ -50,9 +50,11 @@ async function main(): Promise<void> {
         AGENT_WORK_ROOT: 'C:\\work\\preferred-root',
         CLAUDE_WORK_ROOT: 'C:\\work\\legacy-root',
         CHAT_BINDINGS_FILE: undefined,
+        AGENT_IDLE_TTL_MS: undefined,
       }, () => {
         const config = loadConfig();
         assert.equal((config as any).agent.workRoot, 'C:\\work\\preferred-root');
+        assert.equal((config as any).agent.idleTtlMs, 30 * 60 * 1000);
       });
 
       withEnv({
@@ -62,6 +64,13 @@ async function main(): Promise<void> {
       }, () => {
         const config = loadConfig();
         assert.equal((config as any).agent.workRoot, 'C:\\work\\legacy-root');
+      });
+
+      withEnv({
+        AGENT_IDLE_TTL_MS: '60000',
+      }, () => {
+        const config = loadConfig();
+        assert.equal((config as any).agent.idleTtlMs, 60_000);
       });
 
       process.chdir(sandboxRoot);

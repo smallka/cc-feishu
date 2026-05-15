@@ -44,3 +44,11 @@
 - Evidence：见 `docs/task-archive/T0006-2026-05-11-prune-legacy-docs.md`。
 - Consequences：后续任务池不再依赖 TODO 文档；当前任务和下一步只写入 `docs/PROGRESS.md`，长期决策写入本文件，任务证据写入 `docs/task-archive/`。
 - Revisit when：用户要求恢复某类历史设计记录，或需要重新建立当前维护用的任务池文档。
+
+### 2026-05-15 - Codex Agent 空闲 30 分钟后自动回收
+
+- Decision：Codex provider 的 per-chat Agent 空闲 30 分钟后自动销毁本地 Agent/app-server 进程链，但保留 session id，下一条消息创建新 Agent 并 resume；TTL 可通过 `AGENT_IDLE_TTL_MS` 调整。
+- Rationale：PM2 主进程正常，但每个曾活跃 chat 会常驻一个 `CodexAgent`，而每个 `CodexAgent` 会持有一个 `codex app-server` 子进程，导致后台 Codex 实例随 chat 数增长。
+- Evidence：见 `docs/task-archive/T0018-2026-05-15-codex-agent-idle-reclaim.md`。
+- Consequences：空闲 chat 不再长期占用 Codex app-server；首次恢复消息会重新启动 Codex Agent，并依赖已有 session id resume。
+- Revisit when：Codex app-server 支持更轻量的长期复用池、实时进程指标显示，或用户需要 Claude provider 也采用同类回收策略。

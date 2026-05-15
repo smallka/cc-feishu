@@ -35,6 +35,7 @@ export interface ChatAgent {
   getSessionId(): string | undefined;
   isInitialized(): boolean;
   isAlive(): boolean;
+  isRunning?(): boolean;
   onResponse(callback: OnResponseCallback): void;
   onError(callback: OnErrorCallback): void;
   getStartTime(): number;
