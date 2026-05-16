@@ -90,7 +90,7 @@ export function decideSession(options: DecideSessionOptions): SessionDecision {
     : { mode: 'new', reason: 'cross_workday' };
 }
 
-export function formatSessionDecisionNotice(decision: SessionDecision): string {
+export function formatSessionDecisionNotice(decision: SessionDecision): string | null {
   switch (decision.reason) {
     case 'explicit_continue':
       return '检测到继续意图，沿用上一个会话。';
@@ -99,7 +99,7 @@ export function formatSessionDecisionNotice(decision: SessionDecision): string {
     case 'continue_unavailable':
       return '检测到继续意图，但当前没有可延续会话，已新开会话。';
     case 'same_workday':
-      return '继续使用上一个会话。';
+      return null;
     case 'cross_workday':
       return '已跨作息日，未检测到继续意图，已新开会话。';
     case 'first_message':

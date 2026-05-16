@@ -45,18 +45,26 @@
 - Consequences：后续任务池不再依赖 TODO 文档；当前任务和下一步只写入 `docs/PROGRESS.md`，长期决策写入本文件，任务证据写入 `docs/task-archive/`。
 - Revisit when：用户要求恢复某类历史设计记录，或需要重新建立当前维护用的任务池文档。
 
-### 2026-05-15 - Codex Agent 空闲 30 分钟后自动回收
+### 2026-05-15 - Codex Agent 空闲后自动回收
 
-- Decision：Codex provider 的 per-chat Agent 空闲 30 分钟后自动销毁本地 Agent/app-server 进程链，但保留 session id，下一条消息创建新 Agent 并 resume；TTL 可通过 `AGENT_IDLE_TTL_MS` 调整。
+- Decision：Codex provider 的 per-chat Agent 空闲一段时间后自动销毁本地 Agent/app-server 进程链，但保留 session id，下一条消息创建新 Agent 并 resume；默认 TTL 现为 4 小时，可通过 `AGENT_IDLE_TTL_MS` 调整。
 - Rationale：PM2 主进程正常，但每个曾活跃 chat 会常驻一个 `CodexAgent`，而每个 `CodexAgent` 会持有一个 `codex app-server` 子进程，导致后台 Codex 实例随 chat 数增长。
-- Evidence：见 `docs/task-archive/T0018-2026-05-15-codex-agent-idle-reclaim.md`。
+- Evidence：见 `docs/task-archive/T0018-2026-05-15-codex-agent-idle-reclaim.md`；默认 TTL 调整见 `docs/task-archive/T0020-2026-05-16-session-retention-and-notice.md`。
 - Consequences：空闲 chat 不再长期占用 Codex app-server；首次恢复消息会重新启动 Codex Agent，并依赖已有 session id resume。
 - Revisit when：Codex app-server 支持更轻量的长期复用池、实时进程指标显示，或用户需要 Claude provider 也采用同类回收策略。
 
 ### 2026-05-15 - 用作息日和简单规则选择会话延续
 
-- Decision：普通消息进入 Agent 前使用纯规则选择会话：同作息日默认延续；跨作息日默认新开；明确继续则延续；明确新开则新开；每次选择都向用户说明。作息日默认以本地 `05:00` 为换日线，可通过 `AGENT_SESSION_DAY_CUTOFF_HOUR` 调整。
+- Decision：普通消息进入 Agent 前使用纯规则选择会话：同作息日默认延续；跨作息日默认新开；明确继续则延续；明确新开则新开；有信息量的选择会向用户说明。作息日默认以本地 `05:00` 为换日线，可通过 `AGENT_SESSION_DAY_CUTOFF_HOUR` 调整。
 - Rationale：用户明确不希望引入额外 agent 判断意图，并希望按作息日而非自然日判断跨天，避免凌晨连续对话被切到新会话。
 - Evidence：见 `docs/task-archive/T0019-2026-05-15-workday-session-decision.md`。
 - Consequences：会话选择可解释且可测试；跨作息日的模糊消息会新开会话，避免旧上下文误续；高风险操作仍应由命令/确认流约束，不仅依赖会话选择。
 - Revisit when：简单规则误判积累到需要新增模式，或需要把会话状态从内存持久化到存储。
+
+### 2026-05-16 - 普通同作息日续用不再发送决策提示
+
+- Decision：同作息日默认延续会话时不再发送 `继续使用上一个会话。`；仍保留跨作息日新开、明确继续、明确新开和无可延续会话等提示。
+- Rationale：普通续用是高频路径，提示过多会被用户感知为 session 保留时间过短；真正改变上下文边界或响应显式意图时才需要提醒。
+- Evidence：见 `docs/task-archive/T0020-2026-05-16-session-retention-and-notice.md`。
+- Consequences：同作息日普通消息会直接进入上一个会话；用户仍可通过 `/stat` 查看当前 session 状态，通过 `/new` 或明确新开意图切换上下文。
+- Revisit when：用户需要所有会话选择都可见，或需要把提示改为可配置。

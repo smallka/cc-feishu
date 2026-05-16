@@ -693,6 +693,10 @@ export class ChatManager {
 
   private async notifySessionDecision(chatId: string, decision: SessionDecision): Promise<void> {
     const text = formatSessionDecisionNotice(decision);
+    if (!text) {
+      return;
+    }
+
     try {
       await this.sessionDecisionNotifier(chatId, text);
     } catch (error: any) {

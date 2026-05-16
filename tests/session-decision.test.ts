@@ -80,7 +80,7 @@ async function main(): Promise<void> {
     reason: 'explicit_new',
   });
 
-  assert.equal(formatSessionDecisionNotice({ mode: 'continue', reason: 'same_workday' }), '继续使用上一个会话。');
+  assert.equal(formatSessionDecisionNotice({ mode: 'continue', reason: 'same_workday' }), null);
   assert.equal(formatSessionDecisionNotice({ mode: 'new', reason: 'cross_workday' }), '已跨作息日，未检测到继续意图，已新开会话。');
   assert.equal(formatSessionDecisionNotice({ mode: 'new', reason: 'continue_unavailable' }), '检测到继续意图，但当前没有可延续会话，已新开会话。');
 

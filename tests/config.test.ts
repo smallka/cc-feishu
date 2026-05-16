@@ -55,7 +55,7 @@ async function main(): Promise<void> {
       }, () => {
         const config = loadConfig();
         assert.equal((config as any).agent.workRoot, 'C:\\work\\preferred-root');
-        assert.equal((config as any).agent.idleTtlMs, 30 * 60 * 1000);
+        assert.equal((config as any).agent.idleTtlMs, 4 * 60 * 60 * 1000);
         assert.equal((config as any).agent.sessionDayCutoffHour, 5);
       });
 

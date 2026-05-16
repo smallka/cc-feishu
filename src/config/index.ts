@@ -139,7 +139,7 @@ const config: Config = {
   agent: {
     provider: resolveAgentProvider(),
     workRoot: resolveAgentWorkRoot(),
-    idleTtlMs: parsePositiveInt('AGENT_IDLE_TTL_MS', 30 * 60 * 1000),
+    idleTtlMs: parsePositiveInt('AGENT_IDLE_TTL_MS', 4 * 60 * 60 * 1000),
     sessionDayCutoffHour: parseHour('AGENT_SESSION_DAY_CUTOFF_HOUR', 5),
   },
   claude: {

@@ -28,7 +28,7 @@
 
 ## Behavior
 
-- Codex agents are scheduled for idle reclaim after `AGENT_IDLE_TTL_MS`, defaulting to 30 minutes.
+- Codex agents are scheduled for idle reclaim after `AGENT_IDLE_TTL_MS`, defaulting to 30 minutes at the time of this task. Current default was later changed in `docs/task-archive/T0020-2026-05-16-session-retention-and-notice.md`.
 - Idle reclaim is provider-scoped: only `provider === 'codex'` uses the timer.
 - If the agent reports a running turn at timer fire time, reclaim is deferred and checked again later.
 - The current session id is retained in chat state before the agent is destroyed.

@@ -10,12 +10,12 @@
 ## 当前任务
 
 - 状态：validated
-- 任务：按作息日和简单意图规则选择是否延续会话。
-- scope：在不启动或重启现有 PM2/生产进程的前提下，为普通消息进入 Agent 前增加本地会话选择规则：同作息日默认延续；跨作息日默认新开，除非文本明确表达继续；明确新开意图始终新开；每次选择都向用户说明。
+- 任务：延长 Codex Agent 空闲保留时间并减少普通续用提示。
+- scope：把默认 Codex idle reclaim TTL 从 30 分钟调长到 4 小时；普通同作息日续用不再发送 `继续使用上一个会话。` 决策提示；保留跨作息日新开、明确继续、明确新开、无可延续会话等有信息量的提示。
 - 验证命令：`npm run verify`
-- 验证结果：passed，`npm run verify` 已在仓库根成功执行 `tsc` 和全部 `tests/*.test.ts`；新增 `session-decision.test.ts` 覆盖作息日换日线、继续/新开意图和无可延续会话兜底，新增 `chat-manager-session-decision.test.ts` 覆盖 ChatManager 的实际 resume/new session 选择与提示。
-- 归档：`docs/task-archive/T0019-2026-05-15-workday-session-decision.md`
-- 当前观察项：用户确认不引入 agent 判断；规则按作息日执行，默认本地 05:00 换日，可用 `AGENT_SESSION_DAY_CUTOFF_HOUR` 调整。本任务未启动 testbot，未重启/清理/影响正在跑的生产 PM2 或 Codex 进程。
+- 验证结果：passed，`npm run verify` 已在仓库根成功执行 `tsc` 和全部单元测试；`git diff --check` 也通过。
+- 归档：`docs/task-archive/T0020-2026-05-16-session-retention-and-notice.md`
+- 当前观察项：用户确认同时调整保留时间和提示策略；默认 TTL 现在是 4 小时，仍可用 `AGENT_IDLE_TTL_MS` 覆盖；普通同作息日续用现在静默。本任务未启动、重启、清理 PM2 或生产 Codex 进程，已部署进程仍需由 operator 重启后才会使用新代码。
 
 ## 下一任务
 

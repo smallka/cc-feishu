@@ -130,7 +130,7 @@ async function main(): Promise<void> {
     await harness.manager.sendMessage('oc_session', '这个怎么处理');
 
     assert.equal(harness.capturedOptions[0].resumeSessionId, 'previous-session');
-    assert.deepEqual(harness.notices, ['继续使用上一个会话。']);
+    assert.deepEqual(harness.notices, []);
   }
 
   {
