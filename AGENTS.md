@@ -20,6 +20,6 @@ task 是 agent 的单焦点工作单元，用来承载目标、范围、验证�
 
 - `AGENTS.md`：项目级 agent 入口，只放高层规则和导航。
 - `README.md`、`INSTALL.md`：面向使用和部署的当前说明。
-- `docs/task-archive/`：已完成、阻塞或取消的 task 证据。
+- `docs/task-archive/`：完成 task 归档。
 - `docs/pm2-win11-pidusage-fix.md`：仅在 Windows/PM2 部署或排障任务中读取。
 - `docs/`：只沉淀当前有效且可复用的领域结论、规则、流程和约束；一次性过程、临时决策和完整验证输出写入 task 归档。
