@@ -18,8 +18,8 @@ async function main(): Promise<void> {
 
     assert.equal(available, true);
     assert.deepEqual(observedArgs, [
-      ['auth', 'status', '--format', 'json'],
-      ['auth', 'check', '--scope', 'drive:file:upload', '--format', 'json'],
+      ['auth', 'status'],
+      ['auth', 'check', '--scope', 'drive:file:upload'],
     ]);
   }
 
@@ -37,7 +37,7 @@ async function main(): Promise<void> {
 
     assert.equal(available, false);
     assert.deepEqual(observedArgs, [
-      ['auth', 'status', '--format', 'json'],
+      ['auth', 'status'],
     ]);
   }
 

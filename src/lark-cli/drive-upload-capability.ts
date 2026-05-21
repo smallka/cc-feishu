@@ -20,20 +20,13 @@ export async function detectLarkDriveUploadAvailable(): Promise<boolean> {
 export async function detectLarkDriveUploadAvailableWithRunner(
   runner: (args: string[]) => Promise<CommandResult>,
 ): Promise<boolean> {
-  const status = await runner(['auth', 'status', '--format', 'json']);
+  const status = await runner(['auth', 'status']);
   if (!isSuccessfulCommand(status)) {
     logDetectionFailure('auth status failed', status);
     return false;
   }
 
-  const scopeCheck = await runner([
-    'auth',
-    'check',
-    '--scope',
-    DRIVE_UPLOAD_SCOPE,
-    '--format',
-    'json',
-  ]);
+  const scopeCheck = await runner(['auth', 'check', '--scope', DRIVE_UPLOAD_SCOPE]);
   if (!isSuccessfulCommand(scopeCheck)) {
     logDetectionFailure('auth check failed', scopeCheck);
     return false;

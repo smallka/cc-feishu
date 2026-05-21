@@ -24,6 +24,7 @@ data/chat-bindings.json.e2e-backup-*
 /.vscode/
 /.idea/
 /.worktrees/
+/.lark-cli-testbot/
 
 # Editor noise
 *.swp

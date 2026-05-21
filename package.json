@@ -16,6 +16,7 @@
     "test:private-chat-default-cwd": "ts-node tests/private-chat-default-cwd.test.ts",
     "test:smoke:codex-app-server": "ts-node tests/codex-app-server-smoke.ts",
     "test:codex-app-server-smoke": "npm run test:smoke:codex-app-server",
+    "test:e2e:feishu": "ts-node tests/feishu-api-e2e.ts",
     "test:manual:stdio": "ts-node tests/stdio-protocol.ts",
     "test:manual:multi-turn": "ts-node tests/multi-turn.ts",
     "test:manual:tool-use": "ts-node tests/tool-use.ts",

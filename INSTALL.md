@@ -119,6 +119,34 @@ pm2 stop cc-feishu-ts-testbot
 - 启动前只需要把 `.env.testbot` 里的测试飞书应用凭据和测试白名单改成真实值
 - 这套方式不会影响主干实例的本地锁和群绑定状态
 
+#### testbot API 级 E2E
+
+真实飞书收发验证使用显式 opt-in 脚本，不会被 `npm test` 自动执行。脚本会用用户身份向测试群发送 `/stat`，再通过 API 读取同群消息，确认 testbot 返回包含 `Provider:` 的状态信息。
+
+先为 testbot 准备独立的 `lark-cli` 配置目录，避免混用主账号配置：
+
+```powershell
+$env:LARKSUITE_CLI_CONFIG_DIR="C:\work\cc-feishu\.lark-cli-testbot"
+$secret = "<FEISHU_APP_SECRET from .env.testbot>"
+$secret | lark-cli config init --app-id "<FEISHU_APP_ID from .env.testbot>" --app-secret-stdin --brand feishu
+lark-cli auth login --scope "im:message im:message.send_as_user im:message.group_msg:get_as_user contact:user.base:readonly"
+lark-cli auth status --verify
+```
+
+把 `auth status --verify` 输出里的 `userOpenId` 加入 `.env.testbot` 的 `FEISHU_ALLOWED_OPEN_IDS`，并确保 testbot 已加入目标测试群。随后运行：
+
+```powershell
+$env:LARKSUITE_CLI_CONFIG_DIR="C:\work\cc-feishu\.lark-cli-testbot"
+$env:FEISHU_E2E_CHAT_ID="oc_xxx"
+npm run test:e2e:feishu
+```
+
+说明：
+
+- 该测试会在 `FEISHU_E2E_CHAT_ID` 指定的群里发送一条真实可见的 `/stat`。
+- 可用 `FEISHU_E2E_TIMEOUT_MS` 调整等待 bot 回复的超时时间，默认 `60000ms`。
+- 如果 scope 不足，脚本会提示需要重新 `auth login --scope ...`。
+
 ### 使用 PM2 托管
 
 推荐在 Windows 常驻运行时使用项目根目录下的 `ecosystem.config.js`：
