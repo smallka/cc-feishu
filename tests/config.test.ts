@@ -57,6 +57,7 @@ async function main(): Promise<void> {
         assert.equal((config as any).agent.workRoot, 'C:\\work\\preferred-root');
         assert.equal((config as any).agent.idleTtlMs, 4 * 60 * 60 * 1000);
         assert.equal((config as any).agent.sessionDayCutoffHour, 5);
+        assert.match((config as any).codex.developerInstructions, /飞书 Bot/);
       });
 
       withEnv({
@@ -75,6 +76,20 @@ async function main(): Promise<void> {
         const config = loadConfig();
         assert.equal((config as any).agent.idleTtlMs, 60_000);
         assert.equal((config as any).agent.sessionDayCutoffHour, 4);
+      });
+
+      withEnv({
+        CODEX_DEVELOPER_INSTRUCTIONS: ' custom codex instructions ',
+      }, () => {
+        const config = loadConfig();
+        assert.equal((config as any).codex.developerInstructions, 'custom codex instructions');
+      });
+
+      withEnv({
+        CODEX_DEVELOPER_INSTRUCTIONS: '   ',
+      }, () => {
+        const config = loadConfig();
+        assert.equal((config as any).codex.developerInstructions, null);
       });
 
       process.chdir(sandboxRoot);

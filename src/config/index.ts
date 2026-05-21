@@ -20,6 +20,9 @@ interface Config {
   claude: {
     model: string;
   };
+  codex: {
+    developerInstructions: string | null;
+  };
   app: {
     env: string;
     logLevel: string;
@@ -34,6 +37,11 @@ export const MODEL_MAP: Record<string, string> = {
   opus: 'claude-opus-4-6',
   sonnet: 'claude-sonnet-4-6',
 };
+
+const DEFAULT_CODEX_DEVELOPER_INSTRUCTIONS = [
+  '用户通过飞书 Bot 交互，可能不在电脑前，也看不到本地终端或桌面 UI。',
+  '回复时应把关键结果、文件位置、上传状态和需要用户决策的事项直接写在飞书消息里；不要依赖终端滚屏、交互式选择器、本地弹窗或“你自己去打开/复制保存”这类操作完成沟通。',
+].join('\n');
 
 function loadEnvironment(): void {
   const configuredEnvFile = (process.env.APP_ENV_FILE || '').trim();
@@ -130,6 +138,15 @@ function resolveStoragePath(rawValue: string | undefined, fallbackRelativePath: 
     : path.resolve(process.cwd(), normalized);
 }
 
+function resolveCodexDeveloperInstructions(): string | null {
+  if (process.env.CODEX_DEVELOPER_INSTRUCTIONS !== undefined) {
+    const configuredInstructions = process.env.CODEX_DEVELOPER_INSTRUCTIONS.trim();
+    return configuredInstructions || null;
+  }
+
+  return DEFAULT_CODEX_DEVELOPER_INSTRUCTIONS;
+}
+
 const config: Config = {
   feishu: {
     appId: process.env.FEISHU_APP_ID || '',
@@ -144,6 +161,9 @@ const config: Config = {
   },
   claude: {
     model: process.env.CLAUDE_MODEL || 'claude-opus-4-6',
+  },
+  codex: {
+    developerInstructions: resolveCodexDeveloperInstructions(),
   },
   app: {
     env: process.env.NODE_ENV || 'development',

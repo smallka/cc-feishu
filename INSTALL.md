@@ -182,6 +182,7 @@ npm start
 | `AGENT_PROVIDER` | Agent 类型，可选 `claude` / `codex` | `claude` |
 | `AGENT_WORK_ROOT` | 默认工作目录 | 当前进程目录 |
 | `CLAUDE_MODEL` | Claude 模型名 | `claude-opus-4-6` |
+| `CODEX_DEVELOPER_INSTRUCTIONS` | Codex 新会话基础 developer instructions；设为空白可禁用默认飞书 Bot 上下文。若新建 Codex 会话时检测到 `lark-cli` 具备 `drive:file:upload` 能力，会自动追加飞书云盘交付提示 | 内置飞书 Bot 上下文 |
 | `SINGLE_INSTANCE_PORT` | 本地启动锁端口 | `8652` |
 | `NODE_ENV` | 运行环境 | `development` |
 | `LOG_LEVEL` | 日志级别 | `info` |

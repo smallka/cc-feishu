@@ -76,6 +76,7 @@ async function main(): Promise<void> {
     assert.equal(FakeCodexMinimalSession.instances.length, 1);
     const session = FakeCodexMinimalSession.instances[0];
     assert.equal(session.options.resumeSessionId, 'resume-session-id');
+    assert.equal(typeof session.options.developerInstructionsProvider, 'function');
 
     session.running = true;
     await agent.destroy();

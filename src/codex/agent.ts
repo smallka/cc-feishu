@@ -5,6 +5,7 @@ import {
   ConcurrentTurnError,
   TurnAbortedError,
 } from '../codex-minimal/session';
+import { resolveCodexDeveloperInstructions } from './developer-instructions';
 import { resolveLegacyCodexLaunchOverrides } from './launch';
 
 let agentCounter = 0;
@@ -32,6 +33,7 @@ export class CodexAgent implements ChatAgent {
       codexPathOverride: launchConfig.executablePath,
       codexArgsPrefix: launchConfig.argsPrefix,
       resumeSessionId,
+      developerInstructionsProvider: resolveCodexDeveloperInstructions,
     });
 
     logger.info('[CodexAgent] Creating agent', {

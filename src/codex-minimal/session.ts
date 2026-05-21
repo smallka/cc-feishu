@@ -9,6 +9,8 @@ export interface CodexMinimalSessionOptions {
   codexPathOverride?: string;
   codexArgsPrefix?: string[];
   resumeSessionId?: string;
+  developerInstructions?: string | null;
+  developerInstructionsProvider?: () => Promise<string | null>;
 }
 
 export interface SendMessageResult {
@@ -59,6 +61,8 @@ export class CodexMinimalSession {
   private readonly codexPathOverride?: string;
   private readonly codexArgsPrefix?: string[];
   private readonly resumeSessionId?: string;
+  private readonly developerInstructions: string | null;
+  private readonly developerInstructionsProvider?: () => Promise<string | null>;
 
   private appServerProcess: CodexAppServerProcess | null = null;
   private rpcClient: CodexAppServerRpcClient | null = null;
@@ -75,6 +79,8 @@ export class CodexMinimalSession {
     this.codexPathOverride = options.codexPathOverride;
     this.codexArgsPrefix = options.codexArgsPrefix;
     this.resumeSessionId = options.resumeSessionId;
+    this.developerInstructions = normalizeOptionalString(options.developerInstructions);
+    this.developerInstructionsProvider = options.developerInstructionsProvider;
   }
 
   async sendMessage(text: string, options?: CodexMinimalSendMessageOptions): Promise<SendMessageResult> {
@@ -367,11 +373,18 @@ export class CodexMinimalSession {
         sandbox: 'danger-full-access',
       });
     } else {
-      await rpcClient.request('thread/start', {
+      const threadStartParams: Record<string, unknown> = {
         cwd: this.workingDirectory,
         approvalPolicy: 'never',
         sandbox: 'danger-full-access',
-      });
+      };
+      const developerInstructions = await this.resolveDeveloperInstructions();
+
+      if (developerInstructions) {
+        threadStartParams.developerInstructions = developerInstructions;
+      }
+
+      await rpcClient.request('thread/start', threadStartParams);
     }
 
     const threadId = rpcClient.getThreadId();
@@ -578,6 +591,14 @@ export class CodexMinimalSession {
     turn.settled = true;
     turn.reject(error);
   }
+
+  private async resolveDeveloperInstructions(): Promise<string | null> {
+    if (this.developerInstructionsProvider) {
+      return normalizeOptionalString(await this.developerInstructionsProvider());
+    }
+
+    return this.developerInstructions;
+  }
 }
 
 function notifyActivity(onActivity: OnActivityCallback | undefined, event: ActivityEvent): void {
@@ -644,6 +665,15 @@ function buildThreadInput(text: string, imagePaths?: string[]): TurnInputItem[] 
   }
 
   return items;
+}
+
+function normalizeOptionalString(value: string | null | undefined): string | null {
+  if (value === null || value === undefined) {
+    return null;
+  }
+
+  const trimmedValue = value.trim();
+  return trimmedValue || null;
 }
 
 function resolveSpawnTarget(
