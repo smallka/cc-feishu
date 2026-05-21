@@ -144,7 +144,9 @@ npm run test:e2e:feishu
 说明：
 
 - 该测试会在 `FEISHU_E2E_CHAT_ID` 指定的群里发送一条真实可见的 `/stat`。
+- 如需验证 Codex 新会话是否吃到飞书 Bot 交互环境提示词，可在构建并重启 testbot 后执行 `npm run test:e2e:feishu-codex-prompt`。该测试会先发送 `/new`，再发送一条短 Codex prompt 探针并等待回复。
 - 可用 `FEISHU_E2E_TIMEOUT_MS` 调整等待 bot 回复的超时时间，默认 `60000ms`。
+- 可用 `FEISHU_CODEX_PROMPT_E2E_TIMEOUT_MS` 调整等待 Codex prompt 探针回复的超时时间，默认 `180000ms`。
 - 如果 scope 不足，脚本会提示需要重新 `auth login --scope ...`。
 
 ### 使用 PM2 托管
