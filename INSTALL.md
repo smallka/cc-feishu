@@ -133,11 +133,17 @@ lark-cli auth login --scope "im:message im:message.send_as_user im:message.group
 lark-cli auth status --verify
 ```
 
-把 `auth status --verify` 输出里的 `userOpenId` 加入 `.env.testbot` 的 `FEISHU_ALLOWED_OPEN_IDS`，并确保 testbot 已加入目标测试群。随后运行：
+把 `auth status --verify` 输出里的 `userOpenId` 加入 `.env.testbot` 的 `FEISHU_ALLOWED_OPEN_IDS`，并在 `.env.testbot` 固定该实例使用的 CLI 配置目录：
+
+```env
+LARKSUITE_CLI_CONFIG_DIR=C:\work\cc-feishu\.lark-cli-testbot
+FEISHU_E2E_CHAT_ID=oc_xxx
+```
+
+确保 testbot 已加入目标测试群。随后运行 E2E 时仍需让测试脚本加载同一份实例配置，推荐在当前 shell 设置 `APP_ENV_FILE`：
 
 ```powershell
-$env:LARKSUITE_CLI_CONFIG_DIR="C:\work\cc-feishu\.lark-cli-testbot"
-$env:FEISHU_E2E_CHAT_ID="oc_xxx"
+$env:APP_ENV_FILE=".env.testbot"
 npm run test:e2e:feishu
 ```
 
@@ -212,7 +218,7 @@ npm start
 | `AGENT_PROVIDER` | Agent 类型，可选 `claude` / `codex` | `claude` |
 | `AGENT_WORK_ROOT` | 默认工作目录 | 当前进程目录 |
 | `CLAUDE_MODEL` | Claude 模型名 | `claude-opus-4-6` |
-| `CODEX_DEVELOPER_INSTRUCTIONS` | Codex 新会话基础 developer instructions；设为空白可禁用默认飞书 Bot 上下文。若新建 Codex 会话时检测到 `lark-cli` 具备 `drive:file:upload` 能力，会自动追加飞书云盘交付提示 | 内置飞书 Bot 上下文 |
+| `CODEX_DEVELOPER_INSTRUCTIONS` | Codex 新会话基础 developer instructions；设为空白可禁用默认飞书 Bot 上下文。若新建 Codex 会话时检测到 `lark-cli` 具备飞书会话文件发送能力，会自动追加文件交付提示 | 内置飞书 Bot 上下文 |
 | `SINGLE_INSTANCE_PORT` | 本地启动锁端口 | `8652` |
 | `NODE_ENV` | 运行环境 | `development` |
 | `LOG_LEVEL` | 日志级别 | `info` |

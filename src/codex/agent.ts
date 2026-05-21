@@ -33,7 +33,7 @@ export class CodexAgent implements ChatAgent {
       codexPathOverride: launchConfig.executablePath,
       codexArgsPrefix: launchConfig.argsPrefix,
       resumeSessionId,
-      developerInstructionsProvider: resolveCodexDeveloperInstructions,
+      developerInstructionsProvider: () => resolveCodexDeveloperInstructions(this.chatId),
     });
 
     logger.info('[CodexAgent] Creating agent', {

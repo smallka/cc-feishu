@@ -2,6 +2,9 @@ import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
+import dotenv from 'dotenv';
+
+loadEnvFile();
 
 const LARK_CLI = resolveLarkCliCommand();
 const REQUIRED_SCOPES = [
@@ -52,6 +55,25 @@ export interface MessageList {
 
 interface DataEnvelope<T> {
   data?: T;
+}
+
+function loadEnvFile(): void {
+  const configuredEnvFile = process.env.APP_ENV_FILE?.trim();
+  if (!configuredEnvFile) {
+    return;
+  }
+
+  const envFile = path.isAbsolute(configuredEnvFile)
+    ? configuredEnvFile
+    : path.resolve(process.cwd(), configuredEnvFile);
+  const result = dotenv.config({
+    path: envFile,
+    override: false,
+  });
+
+  if (result.error) {
+    throw result.error;
+  }
 }
 
 function resolveLarkCliCommand(): { command: string; prefixArgs: string[] } {
@@ -283,4 +305,3 @@ export async function waitForMatchingMessage(options: {
 
   throw new Error(options.describeTimeout(lastTotal));
 }
-

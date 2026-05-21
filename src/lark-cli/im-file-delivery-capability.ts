@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process';
 import logger from '../utils/logger';
 
 const LARK_CLI_COMMAND = 'lark-cli';
-const DRIVE_UPLOAD_SCOPE = 'drive:file:upload';
+const USER_FILE_DELIVERY_SCOPE = 'im:message im:resource';
 const DETECTION_TIMEOUT_MS = 2_000;
 
 interface CommandResult {
@@ -13,26 +13,42 @@ interface CommandResult {
   error?: Error;
 }
 
-export async function detectLarkDriveUploadAvailable(): Promise<boolean> {
-  return detectLarkDriveUploadAvailableWithRunner(runLarkCli);
+export async function detectLarkImFileDeliveryAvailable(chatId?: string): Promise<boolean> {
+  return detectLarkImFileDeliveryAvailableWithRunner(runLarkCli, {
+    appCredentialsAvailable: Boolean(configuredAppCredentialsAvailable()),
+    chatId,
+  });
 }
 
-export async function detectLarkDriveUploadAvailableWithRunner(
+export async function detectLarkImFileDeliveryAvailableWithRunner(
   runner: (args: string[]) => Promise<CommandResult>,
+  options: {
+    appCredentialsAvailable?: boolean;
+    chatId?: string;
+  } = {},
 ): Promise<boolean> {
-  const status = await runner(['auth', 'status']);
-  if (!isSuccessfulCommand(status)) {
-    logDetectionFailure('auth status failed', status);
+  if (options.appCredentialsAvailable && options.chatId) {
+    return true;
+  }
+
+  const help = await runner(['im', '+messages-send', '--help']);
+  if (!isSuccessfulCommand(help)) {
+    logDetectionFailure('im +messages-send help failed', help);
     return false;
   }
 
-  const scopeCheck = await runner(['auth', 'check', '--scope', DRIVE_UPLOAD_SCOPE]);
-  if (!isSuccessfulCommand(scopeCheck)) {
-    logDetectionFailure('auth check failed', scopeCheck);
-    return false;
+  const userScopeCheck = await runner(['auth', 'check', '--scope', USER_FILE_DELIVERY_SCOPE]);
+  if (isSuccessfulCommand(userScopeCheck)) {
+    return true;
   }
 
-  return true;
+  logDetectionFailure('auth check failed', userScopeCheck);
+
+  return false;
+}
+
+function configuredAppCredentialsAvailable(): boolean {
+  return Boolean(process.env.FEISHU_APP_ID?.trim() && process.env.FEISHU_APP_SECRET?.trim());
 }
 
 function runLarkCli(args: string[]): Promise<CommandResult> {
@@ -97,7 +113,7 @@ function isSuccessfulCommand(result: CommandResult): boolean {
 }
 
 function logDetectionFailure(reason: string, result: CommandResult): void {
-  logger.debug('[LarkDriveUploadCapability] detection skipped', {
+  logger.debug('[LarkImFileDeliveryCapability] detection skipped', {
     reason,
     exitCode: result.exitCode,
     timedOut: result.timedOut,

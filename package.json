@@ -18,6 +18,7 @@
     "test:codex-app-server-smoke": "npm run test:smoke:codex-app-server",
     "test:e2e:feishu": "ts-node tests/feishu-api-e2e.ts",
     "test:e2e:feishu-codex-prompt": "ts-node tests/feishu-codex-prompt-e2e.ts",
+    "test:e2e:feishu-codex-ppt-upload": "ts-node tests/feishu-codex-ppt-upload-e2e.ts",
     "test:manual:stdio": "ts-node tests/stdio-protocol.ts",
     "test:manual:multi-turn": "ts-node tests/multi-turn.ts",
     "test:manual:tool-use": "ts-node tests/tool-use.ts",
