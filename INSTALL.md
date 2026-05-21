@@ -155,6 +155,14 @@ npm run test:e2e:feishu
 - 可用 `FEISHU_CODEX_PROMPT_E2E_TIMEOUT_MS` 调整等待 Codex prompt 探针回复的超时时间，默认 `180000ms`。
 - 如果 scope 不足，脚本会提示需要重新 `auth login --scope ...`。
 
+Codex 默认文件交付使用 testbot 应用 / bot 权限把文件发送到当前飞书会话；这不依赖 testbot 专用 user token 具备 `im:resource`。如果需要手工用 `lark-cli im +messages-send --as user --file ...` 发送文件，可额外给该 user token 增量授权：
+
+```powershell
+$env:LARKSUITE_CLI_CONFIG_DIR="C:\work\cc-feishu\.lark-cli-testbot"
+lark-cli auth login --scope "im:resource"
+lark-cli auth check --scope "im:message im:resource"
+```
+
 ### 使用 PM2 托管
 
 推荐在 Windows 常驻运行时使用项目根目录下的 `ecosystem.config.js`：
@@ -218,7 +226,7 @@ npm start
 | `AGENT_PROVIDER` | Agent 类型，可选 `claude` / `codex` | `claude` |
 | `AGENT_WORK_ROOT` | 默认工作目录 | 当前进程目录 |
 | `CLAUDE_MODEL` | Claude 模型名 | `claude-opus-4-6` |
-| `CODEX_DEVELOPER_INSTRUCTIONS` | Codex 新会话基础 developer instructions；设为空白可禁用默认飞书 Bot 上下文。若新建 Codex 会话时检测到 `lark-cli` 具备飞书会话文件发送能力，会自动追加文件交付提示 | 内置飞书 Bot 上下文 |
+| `CODEX_DEVELOPER_INSTRUCTIONS` | Codex 新会话基础 developer instructions；设为空白可禁用默认飞书 Bot 上下文。若新建 Codex 会话时检测到 bot/app 凭证可向当前 chat 发送文件，或本地 user-authenticated `lark-cli` 具备文件发送能力，会自动追加文件交付提示 | 内置飞书 Bot 上下文 |
 | `SINGLE_INSTANCE_PORT` | 本地启动锁端口 | `8652` |
 | `NODE_ENV` | 运行环境 | `development` |
 | `LOG_LEVEL` | 日志级别 | `info` |

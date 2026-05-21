@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process';
 import logger from '../utils/logger';
 
 const LARK_CLI_COMMAND = 'lark-cli';
-const USER_FILE_DELIVERY_SCOPE = 'im:message im:resource';
+const USER_CLI_FILE_DELIVERY_SCOPE = 'im:message im:resource';
 const DETECTION_TIMEOUT_MS = 2_000;
 
 interface CommandResult {
@@ -27,17 +27,20 @@ export async function detectLarkImFileDeliveryAvailableWithRunner(
     chatId?: string;
   } = {},
 ): Promise<boolean> {
+  // Primary path: Codex runs inside the Feishu bot process, so app credentials
+  // plus the current chat are enough for bot-side file delivery.
   if (options.appCredentialsAvailable && options.chatId) {
     return true;
   }
 
+  // Fallback path: a local user-authenticated lark-cli can also send files.
   const help = await runner(['im', '+messages-send', '--help']);
   if (!isSuccessfulCommand(help)) {
     logDetectionFailure('im +messages-send help failed', help);
     return false;
   }
 
-  const userScopeCheck = await runner(['auth', 'check', '--scope', USER_FILE_DELIVERY_SCOPE]);
+  const userScopeCheck = await runner(['auth', 'check', '--scope', USER_CLI_FILE_DELIVERY_SCOPE]);
   if (isSuccessfulCommand(userScopeCheck)) {
     return true;
   }

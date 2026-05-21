@@ -62,6 +62,27 @@ async function main(): Promise<void> {
   }
 
   {
+    const observedArgs: string[][] = [];
+    const available = await detectLarkImFileDeliveryAvailableWithRunner(async (args) => {
+      observedArgs.push(args);
+      return {
+        exitCode: 0,
+        stdout: '{}',
+        stderr: '',
+        timedOut: false,
+      };
+    }, {
+      appCredentialsAvailable: true,
+    });
+
+    assert.equal(available, true);
+    assert.deepEqual(observedArgs, [
+      ['im', '+messages-send', '--help'],
+      ['auth', 'check', '--scope', 'im:message im:resource'],
+    ]);
+  }
+
+  {
     let calls = 0;
     const available = await detectLarkImFileDeliveryAvailableWithRunner(async () => {
       calls += 1;
