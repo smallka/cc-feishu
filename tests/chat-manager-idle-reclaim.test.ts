@@ -149,6 +149,19 @@ async function main(): Promise<void> {
 
     await harness.manager.sendMessage('oc_idle', 'after idle');
     assert.equal(harness.createdAgents.length, 2);
+    assert.equal(harness.capturedOptions[1].resumeSessionId, undefined);
+  }
+
+  {
+    const harness = createHarness();
+
+    await harness.manager.sendMessage('oc_idle_continue', 'hello');
+    harness.advance(30_000);
+    await harness.fireTimer();
+
+    await harness.manager.sendMessage('oc_idle_continue', '继续刚才的');
+
+    assert.equal(harness.createdAgents.length, 2);
     assert.equal(harness.capturedOptions[1].resumeSessionId, 'fake-1-thread');
   }
 

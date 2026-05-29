@@ -4,6 +4,7 @@ export type SessionDecisionReason =
   | 'explicit_continue'
   | 'explicit_new'
   | 'continue_unavailable'
+  | 'retention_expired'
   | 'same_workday'
   | 'cross_workday'
   | 'first_message';
@@ -18,6 +19,7 @@ interface DecideSessionOptions {
   currentAtMs: number;
   text: string;
   workdayCutoffHour?: number;
+  allowImplicitContinue?: boolean;
 }
 
 const DEFAULT_WORKDAY_CUTOFF_HOUR = 5;
@@ -85,6 +87,10 @@ export function decideSession(options: DecideSessionOptions): SessionDecision {
     return { mode: 'new', reason: 'first_message' };
   }
 
+  if (options.allowImplicitContinue === false) {
+    return { mode: 'new', reason: 'retention_expired' };
+  }
+
   return isSameWorkday(options.previousAtMs, options.currentAtMs, options.workdayCutoffHour)
     ? { mode: 'continue', reason: 'same_workday' }
     : { mode: 'new', reason: 'cross_workday' };
@@ -98,6 +104,8 @@ export function formatSessionDecisionNotice(decision: SessionDecision): string |
       return '检测到新开意图，已新开会话。';
     case 'continue_unavailable':
       return '检测到继续意图，但当前没有可延续会话，已新开会话。';
+    case 'retention_expired':
+      return '已超过 agent 保留时长，未检测到继续意图，已新开会话。';
     case 'same_workday':
       return null;
     case 'cross_workday':

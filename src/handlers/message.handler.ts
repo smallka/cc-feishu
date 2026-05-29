@@ -52,6 +52,10 @@ const workloadQueue = new ChatWorkloadQueue<QueuedMessageTask>({
   processTask: (task, context) => handleQueuedWorkload(task, context.startTime, {
     onActivity: context.onActivity,
   }),
+  longRunningNotifier: (chatId, text) => messageService.sendTextMessage(chatId, text),
+  longTaskNoticeFirstMs: config.agent.longTaskNoticeFirstMs,
+  longTaskNoticeIntervalMs: config.agent.longTaskNoticeIntervalMs,
+  longTaskNoticeMaxCount: config.agent.longTaskNoticeMaxCount,
 });
 
 function getUnauthorizedText(openId: string): string {

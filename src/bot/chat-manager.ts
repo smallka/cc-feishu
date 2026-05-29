@@ -26,6 +26,7 @@ interface ChatData {
   cwd: string;
   provider: AgentProvider;
   sessionId: string | undefined;
+  implicitResumeAllowed?: boolean;
   sessionNotified?: boolean;
   lastActiveAt?: number;
   idleReclaimedAt?: number;
@@ -185,6 +186,7 @@ export class ChatManager {
       cwd: newCwd,
       provider,
       sessionId: undefined,
+      implicitResumeAllowed: true,
       sessionNotified: false,
       lastActiveAt: this.now(),
     });
@@ -206,6 +208,7 @@ export class ChatManager {
       cwd,
       provider,
       sessionId: undefined,
+      implicitResumeAllowed: true,
       sessionNotified: false,
       lastActiveAt: this.now(),
     });
@@ -227,6 +230,7 @@ export class ChatManager {
       cwd,
       provider,
       sessionId: undefined,
+      implicitResumeAllowed: true,
       sessionNotified: false,
       lastActiveAt: this.now(),
     });
@@ -379,6 +383,7 @@ export class ChatManager {
       cwd: target.cwd,
       provider,
       sessionId: target.sessionId,
+      implicitResumeAllowed: true,
       sessionNotified: false,
       lastActiveAt: this.now(),
     });
@@ -490,7 +495,7 @@ export class ChatManager {
     const data = this.chats.get(chatId);
     const cwd = data?.cwd ?? this.getStoredCwd(chatId) ?? this.defaultCwd;
     const storedSessionId = data?.sessionId;
-    const resumeSessionId = this.supportsSessionResume(chatId) && storedSessionId
+    const resumeSessionId = this.supportsSessionResume(chatId) && storedSessionId && data?.implicitResumeAllowed !== false
       ? storedSessionId
       : undefined;
 
@@ -536,6 +541,7 @@ export class ChatManager {
           ...currentData,
           sessionNotified: true,
           sessionId: actualSessionId,
+          implicitResumeAllowed: true,
           lastActiveAt: this.now(),
         });
       }
@@ -559,6 +565,7 @@ export class ChatManager {
       cwd,
       provider,
       sessionId: agent.getSessionId(),
+      implicitResumeAllowed: true,
       sessionNotified: false,
       lastActiveAt: this.now(),
     });
@@ -663,10 +670,16 @@ export class ChatManager {
       currentAtMs: this.now(),
       text,
       workdayCutoffHour: this.sessionDayCutoffHour,
+      allowImplicitContinue: currentData?.implicitResumeAllowed !== false,
     });
 
     if (decision.mode === 'new') {
       await this.prepareNewSession(chatId, currentData);
+    } else if (decision.reason === 'explicit_continue' && currentData?.implicitResumeAllowed === false) {
+      this.chats.set(chatId, {
+        ...currentData,
+        implicitResumeAllowed: true,
+      });
     }
 
     await this.notifySessionDecision(chatId, decision);
@@ -685,6 +698,7 @@ export class ChatManager {
       cwd,
       provider,
       sessionId: undefined,
+      implicitResumeAllowed: true,
       sessionNotified: false,
       idleReclaimedAt: undefined,
       lastActiveAt: latestData?.lastActiveAt,
@@ -719,6 +733,7 @@ export class ChatManager {
       cwd,
       provider,
       sessionId,
+      implicitResumeAllowed: true,
       lastActiveAt: this.now(),
     });
   }
@@ -795,6 +810,7 @@ export class ChatManager {
       this.chats.set(chatId, {
         ...currentData,
         sessionId,
+        implicitResumeAllowed: false,
         lastActiveAt: this.now(),
         idleReclaimedAt: this.now(),
       });

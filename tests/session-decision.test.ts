@@ -40,6 +40,26 @@ async function main(): Promise<void> {
     previousAtMs: at('2026-05-15T23:30:00+08:00'),
     currentAtMs: at('2026-05-16T00:30:00+08:00'),
     text: '这个怎么处理',
+    allowImplicitContinue: false,
+  }), {
+    mode: 'new',
+    reason: 'retention_expired',
+  });
+
+  assert.deepEqual(decideSession({
+    previousAtMs: at('2026-05-15T23:30:00+08:00'),
+    currentAtMs: at('2026-05-16T00:30:00+08:00'),
+    text: '继续刚才的',
+    allowImplicitContinue: false,
+  }), {
+    mode: 'continue',
+    reason: 'explicit_continue',
+  });
+
+  assert.deepEqual(decideSession({
+    previousAtMs: at('2026-05-15T23:30:00+08:00'),
+    currentAtMs: at('2026-05-16T00:30:00+08:00'),
+    text: '这个怎么处理',
   }), {
     mode: 'continue',
     reason: 'same_workday',
@@ -81,6 +101,7 @@ async function main(): Promise<void> {
   });
 
   assert.equal(formatSessionDecisionNotice({ mode: 'continue', reason: 'same_workday' }), null);
+  assert.equal(formatSessionDecisionNotice({ mode: 'new', reason: 'retention_expired' }), '已超过 agent 保留时长，未检测到继续意图，已新开会话。');
   assert.equal(formatSessionDecisionNotice({ mode: 'new', reason: 'cross_workday' }), '已跨作息日，未检测到继续意图，已新开会话。');
   assert.equal(formatSessionDecisionNotice({ mode: 'new', reason: 'continue_unavailable' }), '检测到继续意图，但当前没有可延续会话，已新开会话。');
 

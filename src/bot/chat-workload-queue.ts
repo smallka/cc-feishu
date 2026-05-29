@@ -22,6 +22,10 @@ export interface ChatWorkloadProcessorContext {
 export interface ChatWorkloadQueueOptions<TTask> {
   describeTask: (task: TTask) => ChatWorkloadDescription;
   processTask: (task: TTask, context: ChatWorkloadProcessorContext) => Promise<void>;
+  longRunningNotifier?: (chatId: string, text: string) => Promise<void>;
+  longTaskNoticeFirstMs?: number;
+  longTaskNoticeIntervalMs?: number;
+  longTaskNoticeMaxCount?: number;
 }
 
 interface ActiveTaskProgress {
@@ -46,11 +50,19 @@ export class ChatWorkloadQueue<TTask> {
   private readonly activeProcessors = new Map<string, Promise<void>>();
   private readonly describeTask: (task: TTask) => ChatWorkloadDescription;
   private readonly processTask: (task: TTask, context: ChatWorkloadProcessorContext) => Promise<void>;
+  private readonly longRunningNotifier?: (chatId: string, text: string) => Promise<void>;
+  private readonly longTaskNoticeFirstMs: number;
+  private readonly longTaskNoticeIntervalMs: number;
+  private readonly longTaskNoticeMaxCount: number;
   private readonly activeTaskProgress = new Map<string, ActiveTaskProgress>();
 
   constructor(options: ChatWorkloadQueueOptions<TTask>) {
     this.describeTask = options.describeTask;
     this.processTask = options.processTask;
+    this.longRunningNotifier = options.longRunningNotifier;
+    this.longTaskNoticeFirstMs = options.longTaskNoticeFirstMs ?? 30 * 1000;
+    this.longTaskNoticeIntervalMs = options.longTaskNoticeIntervalMs ?? 60 * 1000;
+    this.longTaskNoticeMaxCount = options.longTaskNoticeMaxCount ?? 5;
   }
 
   enqueue(task: TTask): number {
@@ -221,6 +233,7 @@ export class ChatWorkloadQueue<TTask> {
     };
 
     this.activeTaskProgress.set(description.chatId, progress);
+    const longTaskNoticeTimer = this.startLongTaskNoticeTimer(progress);
     try {
       await this.processTask(task, { startTime, onActivity: markActivity });
     } catch (error) {
@@ -232,10 +245,88 @@ export class ChatWorkloadQueue<TTask> {
         error,
       });
     } finally {
+      longTaskNoticeTimer?.cancel();
       if (this.activeTaskProgress.get(description.chatId) === progress) {
         this.activeTaskProgress.delete(description.chatId);
       }
     }
+  }
+
+  private startLongTaskNoticeTimer(progress: ActiveTaskProgress): { cancel: () => void } | null {
+    if (
+      !this.longRunningNotifier ||
+      this.longTaskNoticeFirstMs <= 0 ||
+      this.longTaskNoticeIntervalMs <= 0 ||
+      this.longTaskNoticeMaxCount <= 0
+    ) {
+      return null;
+    }
+
+    let sentCount = 0;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let cancelled = false;
+
+    const schedule = (delayMs: number) => {
+      timer = setTimeout(async () => {
+        if (cancelled || this.activeTaskProgress.get(progress.chatId) !== progress) {
+          return;
+        }
+
+        sentCount += 1;
+        try {
+          await this.longRunningNotifier?.(progress.chatId, this.formatLongTaskNotice(progress));
+        } catch (error) {
+          logger.warn('Failed to send long-running task notice', {
+            chatId: progress.chatId,
+            messageId: progress.messageId,
+            error,
+          });
+        }
+
+        if (!cancelled && sentCount < this.longTaskNoticeMaxCount) {
+          schedule(this.longTaskNoticeIntervalMs);
+        }
+      }, delayMs);
+
+      if (typeof (timer as { unref?: () => unknown }).unref === 'function') {
+        (timer as { unref: () => unknown }).unref();
+      }
+    };
+
+    schedule(this.longTaskNoticeFirstMs);
+
+    return {
+      cancel: () => {
+        cancelled = true;
+        if (timer) {
+          clearTimeout(timer);
+          timer = null;
+        }
+      },
+    };
+  }
+
+  private formatLongTaskNotice(progress: ActiveTaskProgress): string {
+    const now = Date.now();
+    const runningDuration = formatDuration((now - progress.startedAt) / 1000);
+    const idleDuration = formatDuration((now - progress.lastActivityAt) / 1000);
+    const lines = [
+      '任务仍在运行：',
+      `- 已运行: ${runningDuration}`,
+      `- 最近无新进展: ${idleDuration}`,
+      `- 当前阶段: ${formatActivityPhase(progress.phase)}`,
+      `- 最近进展: ${progress.reason}`,
+      `- 当前排队: ${this.getChatQueueLength(progress.chatId)} 条`,
+    ];
+
+    if (progress.method) {
+      lines.push(`- 最近事件: ${progress.method}`);
+    }
+    if (progress.turnId) {
+      lines.push(`- Turn: ${progress.turnId.slice(0, 8)}...`);
+    }
+
+    return lines.join('\n');
   }
 }
 
