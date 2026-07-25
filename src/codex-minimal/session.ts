@@ -162,6 +162,10 @@ export class CodexMinimalSession {
     return this.inFlightPromise !== null;
   }
 
+  isAlive(): boolean {
+    return canReturnToReadyState(this.state);
+  }
+
   getThreadId(): string | null {
     return this.threadId;
   }

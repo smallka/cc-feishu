@@ -185,6 +185,21 @@ async function main(): Promise<void> {
     assert.equal(harness.capturedOptions[1].resumeSessionId, undefined);
   }
 
+  {
+    const harness = createHarness(at('2026-05-16T00:30:00+08:00'));
+
+    await harness.manager.sendMessage('oc_session', 'first');
+    const brokenAgent = harness.createdAgents[0];
+    brokenAgent.alive = false;
+
+    await harness.manager.sendMessage('oc_session', 'after broken session');
+
+    assert.equal(brokenAgent.destroyCalls, 1);
+    assert.equal(harness.createdAgents.length, 2);
+    assert.equal(harness.capturedOptions[1].resumeSessionId, 'new-session-1');
+    assert.deepEqual(harness.createdAgents[1].sentMessages, ['after broken session']);
+  }
+
   console.log('chat-manager-session-decision.test.ts passed');
 }
 

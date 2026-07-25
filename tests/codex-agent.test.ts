@@ -12,6 +12,7 @@ class FakeCodexMinimalSession {
 
   readonly options: Record<string, unknown>;
   running = false;
+  alive = true;
   interruptCalls = 0;
   destroyCalls = 0;
 
@@ -34,6 +35,10 @@ class FakeCodexMinimalSession {
 
   isRunning(): boolean {
     return this.running;
+  }
+
+  isAlive(): boolean {
+    return this.alive;
   }
 
   async destroy(): Promise<void> {
@@ -77,6 +82,10 @@ async function main(): Promise<void> {
     const session = FakeCodexMinimalSession.instances[0];
     assert.equal(session.options.resumeSessionId, 'resume-session-id');
     assert.equal(typeof session.options.developerInstructionsProvider, 'function');
+    assert.equal(agent.isAlive(), true);
+
+    session.alive = false;
+    assert.equal(agent.isAlive(), false);
 
     session.running = true;
     await agent.destroy();

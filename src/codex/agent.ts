@@ -180,7 +180,7 @@ export class CodexAgent implements ChatAgent {
   }
 
   isAlive(): boolean {
-    return !this.destroyed;
+    return !this.destroyed && this.session.isAlive();
   }
 
   isRunning(): boolean {

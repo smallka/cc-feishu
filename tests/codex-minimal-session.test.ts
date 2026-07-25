@@ -22,6 +22,16 @@ async function main() {
     const session = new CodexMinimalSession({
       workingDirectory: 'C:\\work\\cc-feishu',
     });
+
+    assert.equal(session.isAlive(), true);
+    (session as any).state = 'broken';
+    assert.equal(session.isAlive(), false);
+  }
+
+  {
+    const session = new CodexMinimalSession({
+      workingDirectory: 'C:\\work\\cc-feishu',
+    });
     const requests: Array<{ method: string; params: Record<string, unknown> }> = [];
 
     (session as any).threadId = 'thread-1';
