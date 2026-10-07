@@ -16,9 +16,8 @@ interface Config {
     workRoot: string;
     idleTtlMs: number;
     sessionDayCutoffHour: number;
-    longTaskNoticeFirstMs: number;
-    longTaskNoticeIntervalMs: number;
-    longTaskNoticeMaxCount: number;
+    stalledTaskHeartbeatThresholdsMs: number[];
+    stalledTaskHeartbeatIntervalMs: number;
   };
   claude: {
     model: string;
@@ -94,6 +93,21 @@ function parsePort(name: string, fallback: number): number {
   return parsed;
 }
 
+function parseIncreasingPositiveIntList(name: string, fallback: number[]): number[] {
+  const raw = (process.env[name] || '').trim();
+  if (!raw) {
+    return [...fallback];
+  }
+
+  const values = raw.split(',').map(value => Number.parseInt(value.trim(), 10));
+  const isValid = values.length > 0 && values.every((value, index) => (
+    Number.isFinite(value) &&
+    value > 0 &&
+    (index === 0 || value > values[index - 1])
+  ));
+  return isValid ? values : [...fallback];
+}
+
 function parseHour(name: string, fallback: number): number {
   const rawValue = (process.env[name] || `${fallback}`).trim();
   const parsed = Number.parseInt(rawValue, 10);
@@ -161,9 +175,14 @@ const config: Config = {
     workRoot: resolveAgentWorkRoot(),
     idleTtlMs: parsePositiveInt('AGENT_IDLE_TTL_MS', 4 * 60 * 60 * 1000),
     sessionDayCutoffHour: parseHour('AGENT_SESSION_DAY_CUTOFF_HOUR', 5),
-    longTaskNoticeFirstMs: parsePositiveInt('AGENT_LONG_TASK_NOTICE_FIRST_MS', 30 * 1000),
-    longTaskNoticeIntervalMs: parsePositiveInt('AGENT_LONG_TASK_NOTICE_INTERVAL_MS', 60 * 1000),
-    longTaskNoticeMaxCount: parsePositiveInt('AGENT_LONG_TASK_NOTICE_MAX_COUNT', 5),
+    stalledTaskHeartbeatThresholdsMs: parseIncreasingPositiveIntList(
+      'AGENT_STALLED_TASK_HEARTBEAT_THRESHOLDS_MS',
+      [2 * 60 * 1000, 5 * 60 * 1000, 10 * 60 * 1000],
+    ),
+    stalledTaskHeartbeatIntervalMs: parsePositiveInt(
+      'AGENT_STALLED_TASK_HEARTBEAT_INTERVAL_MS',
+      10 * 60 * 1000,
+    ),
   },
   claude: {
     model: process.env.CLAUDE_MODEL || 'claude-opus-4-6',

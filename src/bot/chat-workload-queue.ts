@@ -22,10 +22,14 @@ export interface ChatWorkloadProcessorContext {
 export interface ChatWorkloadQueueOptions<TTask> {
   describeTask: (task: TTask) => ChatWorkloadDescription;
   processTask: (task: TTask, context: ChatWorkloadProcessorContext) => Promise<void>;
-  longRunningNotifier?: (chatId: string, text: string) => Promise<void>;
-  longTaskNoticeFirstMs?: number;
-  longTaskNoticeIntervalMs?: number;
-  longTaskNoticeMaxCount?: number;
+  stalledTaskHeartbeatNotifier?: (chatId: string, text: string) => Promise<void>;
+  stalledTaskHeartbeatThresholdsMs?: readonly number[];
+  stalledTaskHeartbeatIntervalMs?: number;
+}
+
+interface StalledTaskHeartbeatController {
+  onActivity: () => void;
+  cancel: () => void;
 }
 
 interface ActiveTaskProgress {
@@ -50,19 +54,18 @@ export class ChatWorkloadQueue<TTask> {
   private readonly activeProcessors = new Map<string, Promise<void>>();
   private readonly describeTask: (task: TTask) => ChatWorkloadDescription;
   private readonly processTask: (task: TTask, context: ChatWorkloadProcessorContext) => Promise<void>;
-  private readonly longRunningNotifier?: (chatId: string, text: string) => Promise<void>;
-  private readonly longTaskNoticeFirstMs: number;
-  private readonly longTaskNoticeIntervalMs: number;
-  private readonly longTaskNoticeMaxCount: number;
+  private readonly stalledTaskHeartbeatNotifier?: (chatId: string, text: string) => Promise<void>;
+  private readonly stalledTaskHeartbeatThresholdsMs: readonly number[];
+  private readonly stalledTaskHeartbeatIntervalMs: number;
   private readonly activeTaskProgress = new Map<string, ActiveTaskProgress>();
 
   constructor(options: ChatWorkloadQueueOptions<TTask>) {
     this.describeTask = options.describeTask;
     this.processTask = options.processTask;
-    this.longRunningNotifier = options.longRunningNotifier;
-    this.longTaskNoticeFirstMs = options.longTaskNoticeFirstMs ?? 30 * 1000;
-    this.longTaskNoticeIntervalMs = options.longTaskNoticeIntervalMs ?? 60 * 1000;
-    this.longTaskNoticeMaxCount = options.longTaskNoticeMaxCount ?? 5;
+    this.stalledTaskHeartbeatNotifier = options.stalledTaskHeartbeatNotifier;
+    this.stalledTaskHeartbeatThresholdsMs = options.stalledTaskHeartbeatThresholdsMs
+      ?? [2 * 60 * 1000, 5 * 60 * 1000, 10 * 60 * 1000];
+    this.stalledTaskHeartbeatIntervalMs = options.stalledTaskHeartbeatIntervalMs ?? 10 * 60 * 1000;
   }
 
   enqueue(task: TTask): number {
@@ -220,6 +223,7 @@ export class ChatWorkloadQueue<TTask> {
       remainingQueueDepth: remainingQueueDepthAtStart,
     });
 
+    let stalledTaskHeartbeat: StalledTaskHeartbeatController | null = null;
     const markActivity = (event?: ActivityEvent) => {
       progress.lastActivityAt = Date.now();
       progress.activityCount += 1;
@@ -230,10 +234,11 @@ export class ChatWorkloadQueue<TTask> {
         progress.threadId = event.threadId;
         progress.turnId = event.turnId;
       }
+      stalledTaskHeartbeat?.onActivity();
     };
 
     this.activeTaskProgress.set(description.chatId, progress);
-    const longTaskNoticeTimer = this.startLongTaskNoticeTimer(progress);
+    stalledTaskHeartbeat = this.startStalledTaskHeartbeat(progress);
     try {
       await this.processTask(task, { startTime, onActivity: markActivity });
     } catch (error) {
@@ -245,46 +250,94 @@ export class ChatWorkloadQueue<TTask> {
         error,
       });
     } finally {
-      longTaskNoticeTimer?.cancel();
+      stalledTaskHeartbeat?.cancel();
       if (this.activeTaskProgress.get(description.chatId) === progress) {
         this.activeTaskProgress.delete(description.chatId);
       }
     }
   }
 
-  private startLongTaskNoticeTimer(progress: ActiveTaskProgress): { cancel: () => void } | null {
+  private startStalledTaskHeartbeat(progress: ActiveTaskProgress): StalledTaskHeartbeatController | null {
     if (
-      !this.longRunningNotifier ||
-      this.longTaskNoticeFirstMs <= 0 ||
-      this.longTaskNoticeIntervalMs <= 0 ||
-      this.longTaskNoticeMaxCount <= 0
+      !this.stalledTaskHeartbeatNotifier ||
+      this.stalledTaskHeartbeatThresholdsMs.length === 0 ||
+      this.stalledTaskHeartbeatThresholdsMs.some((value, index, values) => (
+        !Number.isFinite(value) ||
+        value <= 0 ||
+        (index > 0 && value <= values[index - 1])
+      )) ||
+      this.stalledTaskHeartbeatIntervalMs <= 0
     ) {
       return null;
     }
 
-    let sentCount = 0;
+    let heartbeatIndex = 0;
+    let generation = 0;
     let timer: ReturnType<typeof setTimeout> | null = null;
     let cancelled = false;
 
-    const schedule = (delayMs: number) => {
+    const getThresholdMs = (): number => {
+      if (heartbeatIndex < this.stalledTaskHeartbeatThresholdsMs.length) {
+        return this.stalledTaskHeartbeatThresholdsMs[heartbeatIndex];
+      }
+
+      const finalThreshold = this.stalledTaskHeartbeatThresholdsMs.at(-1) ?? 0;
+      const repeatCount = heartbeatIndex - this.stalledTaskHeartbeatThresholdsMs.length + 1;
+      return finalThreshold + repeatCount * this.stalledTaskHeartbeatIntervalMs;
+    };
+
+    const clearTimer = () => {
+      if (timer) {
+        clearTimeout(timer);
+        timer = null;
+      }
+    };
+
+    const schedule = () => {
+      clearTimer();
+      const scheduledGeneration = generation;
+      const delayMs = Math.max(0, getThresholdMs() - (Date.now() - progress.lastActivityAt));
       timer = setTimeout(async () => {
-        if (cancelled || this.activeTaskProgress.get(progress.chatId) !== progress) {
+        timer = null;
+        if (
+          cancelled ||
+          scheduledGeneration !== generation ||
+          this.activeTaskProgress.get(progress.chatId) !== progress
+        ) {
           return;
         }
 
-        sentCount += 1;
+        const thresholdMs = getThresholdMs();
+        const idleMs = Date.now() - progress.lastActivityAt;
+        if (idleMs < thresholdMs) {
+          schedule();
+          return;
+        }
+
+        if (isResponseDeliveryPhase(progress.phase)) {
+          return;
+        }
+
         try {
-          await this.longRunningNotifier?.(progress.chatId, this.formatLongTaskNotice(progress));
+          await this.stalledTaskHeartbeatNotifier?.(
+            progress.chatId,
+            this.formatStalledTaskHeartbeat(progress, heartbeatIndex),
+          );
         } catch (error) {
-          logger.warn('Failed to send long-running task notice', {
+          logger.warn('Failed to send stalled task heartbeat', {
             chatId: progress.chatId,
             messageId: progress.messageId,
             error,
           });
         }
 
-        if (!cancelled && sentCount < this.longTaskNoticeMaxCount) {
-          schedule(this.longTaskNoticeIntervalMs);
+        if (
+          !cancelled &&
+          scheduledGeneration === generation &&
+          this.activeTaskProgress.get(progress.chatId) === progress
+        ) {
+          heartbeatIndex += 1;
+          schedule();
         }
       }, delayMs);
 
@@ -293,41 +346,47 @@ export class ChatWorkloadQueue<TTask> {
       }
     };
 
-    schedule(this.longTaskNoticeFirstMs);
+    schedule();
 
     return {
+      onActivity: () => {
+        if (cancelled) {
+          return;
+        }
+        generation += 1;
+        heartbeatIndex = 0;
+        schedule();
+      },
       cancel: () => {
         cancelled = true;
-        if (timer) {
-          clearTimeout(timer);
-          timer = null;
-        }
+        generation += 1;
+        clearTimer();
       },
     };
   }
 
-  private formatLongTaskNotice(progress: ActiveTaskProgress): string {
+  private formatStalledTaskHeartbeat(progress: ActiveTaskProgress, heartbeatIndex: number): string {
     const now = Date.now();
     const runningDuration = formatDuration((now - progress.startedAt) / 1000);
     const idleDuration = formatDuration((now - progress.lastActivityAt) / 1000);
-    const lines = [
-      '任务仍在运行：',
-      `- 已运行: ${runningDuration}`,
-      `- 最近无新进展: ${idleDuration}`,
-      `- 当前阶段: ${formatActivityPhase(progress.phase)}`,
-      `- 最近进展: ${progress.reason}`,
-      `- 当前排队: ${this.getChatQueueLength(progress.chatId)} 条`,
-    ];
+    const lines = heartbeatIndex === 0
+      ? [`任务仍在处理，但过去 ${idleDuration}内没有收到新的执行进展。`]
+      : [`任务仍在处理，但仍未恢复进展，已连续 ${idleDuration}没有新的执行事件。`];
 
-    if (progress.method) {
-      lines.push(`- 最近事件: ${progress.method}`);
-    }
-    if (progress.turnId) {
-      lines.push(`- Turn: ${progress.turnId.slice(0, 8)}...`);
-    }
+    lines.push(
+      '当前可能正在等待模型、外部服务或长时间命令返回。',
+      `- 已运行: ${runningDuration}`,
+      `- 当前阶段: ${formatActivityPhase(progress.phase)}`,
+      `- 当前排队: ${this.getChatQueueLength(progress.chatId)} 条`,
+      '如需终止，可发送 /stop。',
+    );
 
     return lines.join('\n');
   }
+}
+
+function isResponseDeliveryPhase(phase: ActivityPhase): boolean {
+  return phase === 'turn_finishing' || phase === 'sending_response' || phase === 'cleanup';
 }
 
 function formatActivityPhase(phase: ActivityPhase): string {

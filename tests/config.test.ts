@@ -52,11 +52,18 @@ async function main(): Promise<void> {
         CHAT_BINDINGS_FILE: undefined,
         AGENT_IDLE_TTL_MS: undefined,
         AGENT_SESSION_DAY_CUTOFF_HOUR: undefined,
+        AGENT_STALLED_TASK_HEARTBEAT_THRESHOLDS_MS: undefined,
+        AGENT_STALLED_TASK_HEARTBEAT_INTERVAL_MS: undefined,
       }, () => {
         const config = loadConfig();
         assert.equal((config as any).agent.workRoot, 'C:\\work\\preferred-root');
         assert.equal((config as any).agent.idleTtlMs, 4 * 60 * 60 * 1000);
         assert.equal((config as any).agent.sessionDayCutoffHour, 5);
+        assert.deepEqual(
+          (config as any).agent.stalledTaskHeartbeatThresholdsMs,
+          [2 * 60 * 1000, 5 * 60 * 1000, 10 * 60 * 1000],
+        );
+        assert.equal((config as any).agent.stalledTaskHeartbeatIntervalMs, 10 * 60 * 1000);
         assert.match((config as any).codex.developerInstructions, /飞书 Bot/);
       });
 
@@ -72,10 +79,14 @@ async function main(): Promise<void> {
       withEnv({
         AGENT_IDLE_TTL_MS: '60000',
         AGENT_SESSION_DAY_CUTOFF_HOUR: '4',
+        AGENT_STALLED_TASK_HEARTBEAT_THRESHOLDS_MS: '1000,3000,9000',
+        AGENT_STALLED_TASK_HEARTBEAT_INTERVAL_MS: '12000',
       }, () => {
         const config = loadConfig();
         assert.equal((config as any).agent.idleTtlMs, 60_000);
         assert.equal((config as any).agent.sessionDayCutoffHour, 4);
+        assert.deepEqual((config as any).agent.stalledTaskHeartbeatThresholdsMs, [1000, 3000, 9000]);
+        assert.equal((config as any).agent.stalledTaskHeartbeatIntervalMs, 12000);
       });
 
       withEnv({
